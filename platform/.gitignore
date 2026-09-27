@@ -1,0 +1,7 @@
+.env
+data/postgres/
+data/postgis/
+work/
+exports/
+app/__pycache__/
+!data/.gitkeep

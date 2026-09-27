@@ -1,0 +1,94 @@
+schema_version: 1
+checked_at: "2026-09-24"
+entries:
+  - code: moscow-743-pp
+    priority: required_core
+    title: "Правила создания, содержания и охраны зеленых насаждений и природных сообществ города Москвы"
+    identifier: "Постановление Правительства Москвы от 10.09.2002 № 743-ПП"
+    official_url: "https://www.mos.ru/upload/documents/files/7389/Postanovlenie743-PP.pdf"
+    source_authority: "Правительство Москвы"
+    source_status: official_file
+    corpus_status: downloaded_verified_file
+    access_policy: internal_copy
+    local_path: "raw/moscow-743-pp__checked-2026-09-24.pdf"
+    media_type: "application/pdf"
+    size_bytes: 8715708
+    page_count: 199
+    sha256: "f5af99982255e6de363543bb2789d395f81a86928c3bebc6ef7ba4a404db2276"
+    retrieved_at: "2026-09-24"
+    consolidated_through: "2025-02-04"
+    edition_note: "Текстовый слой читается; перед публикацией правил повторно проверить действительность и более поздние изменения"
+    extraction:
+      local_path: "extracted/moscow-743-pp__checked-2026-09-24.txt"
+      method: "pdftotext -layout"
+      sha256: "c460ce0cc896415c1622d1d0b07c650a26f3ecca892cb35565055aaa883d3182"
+      bytes: 1804260
+      lines: 15316
+
+  - code: moscow-623-pp-mgsn-1-02-02
+    priority: required_core
+    title: "Нормы и правила проектирования комплексного благоустройства на территории города Москвы МГСН 1.02-02"
+    identifier: "Постановление Правительства Москвы от 06.08.2002 № 623-ПП"
+    official_url: null
+    source_authority: "Правительство Москвы"
+    source_status: official_url_required
+    corpus_status: blocked_until_source_verified
+    access_policy: link_only
+    edition_note: "Не путать с актами № 623-ПП других дат; проверить консолидированную редакцию и изменения"
+
+  - code: sp-42-13330-2016
+    priority: required_core
+    title: "Градостроительство. Планировка и застройка городских и сельских поселений"
+    identifier: "СП 42.13330.2016"
+    official_url: "https://minstroyrf.gov.ru/docs/14465/"
+    reference_urls:
+      - url: "https://docs.cntd.ru/document/456054209"
+        role: "current_consolidated_reference"
+        note: "На странице заявлены изменения № 1, 2, 3, 4; сохранить вручную в разрешённое окно доступа"
+      - url: "https://docs.cntd.ru/document/5200163"
+        role: "legacy_snip_reference"
+        note: "Старый СНиП 2.07.01-89; не использовать вместо актуализированного СП 42"
+    source_authority: "Минстрой России"
+    source_status: official_card
+    corpus_status: changes_and_download_link_required
+    access_policy: link_only
+    acquisition_strategy: "manual_evening_access_window_from_docs.cntd.ru/document/456054209; record_terms_and_hash"
+    access_probe_2026_09_24: "DNS and HTTP reachable; HTTP redirects to HTTPS; TCP connection to HTTPS timed out from agent environment"
+    expected_print_pages: 140
+    expected_print_pages_status: "reference_only; verify from acquired consolidated file"
+    edition_note: "Базовый текст и все действующие изменения должны образовать одну проверенную редакцию"
+
+  - code: sp-82-13330-2016
+    priority: extended
+    title: "Благоустройство территорий"
+    identifier: "СП 82.13330.2016"
+    official_url: "https://minstroyrf.gov.ru/docs/14131/"
+    source_authority: "Минстрой России"
+    source_status: official_card
+    corpus_status: changes_and_download_link_required
+    access_policy: link_only
+    acquisition_strategy: "manual_evening_access_window; provider_url_and_terms_required"
+    edition_note: "Учесть опубликованные изменения, включая изменение № 3"
+
+  - code: sp-59-13330
+    priority: extended
+    title: "Доступность зданий и сооружений для маломобильных групп населения"
+    identifier: "СП 59.13330"
+    official_url: "https://minstroyrf.gov.ru/docs/"
+    source_authority: "Минстрой России"
+    source_status: exact_edition_required
+    corpus_status: metadata_only
+    access_policy: link_only
+    acquisition_strategy: "manual_evening_access_window; provider_url_and_terms_required"
+
+  - code: gost-21-508-2020
+    priority: extended
+    title: "СПДС. Правила выполнения рабочей документации генеральных планов предприятий, сооружений и жилищно-гражданских объектов"
+    identifier: "ГОСТ 21.508-2020"
+    official_url: null
+    source_authority: "Росстандарт"
+    source_status: official_catalog_url_required
+    corpus_status: metadata_only
+    access_policy: restricted
+    acquisition_strategy: "manual_evening_access_window_if_terms_allow_internal_copy"
+    edition_note: "Не скачивать полный текст с неофициального зеркала; использовать законно полученную копию"

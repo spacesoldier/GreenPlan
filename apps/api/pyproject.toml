@@ -1,0 +1,38 @@
+[project]
+name = "greenplan-api"
+version = "0.1.0"
+description = "GreenPlan read-only domain API"
+requires-python = ">=3.12"
+dependencies = [
+  "anyio==4.11.0",
+  "celery==5.5.3",
+  "ezdxf==1.4.4",
+  "fastapi==0.141.1",
+  "psycopg[binary]==3.3.6",
+  "pydantic-settings==2.10.1",
+  "python-multipart==0.0.20",
+  "redis==5.2.1",
+  "starlette==0.48.0",
+  "uvicorn[standard]==0.37.0",
+]
+
+[dependency-groups]
+dev = [
+  "httpx==0.28.1",
+  "pytest==8.4.2",
+  "pytest-cov==7.0.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/greenplan_api"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["greenplan_api"]

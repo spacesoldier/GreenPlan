@@ -1,0 +1,43 @@
+# Планы фаз разработки
+
+Этот каталог хранит исполнимые планы и отчёты фаз. Архитектурные причины находятся в [ADR](../adr/README.md), предметные спецификации — в остальных документах `docs/`.
+
+## Lifecycle фазы
+
+```text
+draft ADR -> accepted ADR -> planned phase -> tests written/failing
+  -> implementation -> tests passing -> verified report -> complete
+```
+
+Статусы phase document:
+
+- `Planned` — scope и acceptance определены, реализация не начата;
+- `In progress` — тесты/реализация начаты;
+- `Verification` — функции готовы, выполняются acceptance/regression checks;
+- `Complete` — отчёт содержит доказательства прохождения gate;
+- `Blocked` — указан внешний blocker и сохранён работоспособный предыдущий baseline.
+
+## Реестр
+
+| Фаза | Статус | Результат |
+|---|---|---|
+| [Phase 1](phase-01-foundation-report.md) | Complete | CAD-конвертация, PostGIS foundation, OSM/rule ingestion design и проверенные исходные артефакты |
+| [Phase 2](phase-02-readonly-vertical-slice.md) | In progress | FastAPI + Next.js, полный поддерживаемый DXF-импорт, Canvas viewport, coherent spatial/raster caches, persisted primary focus и derived render assemblies; [checkpoint 1](phase-02-checkpoint-01.md), [checkpoint 2](phase-02-checkpoint-02.md), [checkpoint 3](phase-02-checkpoint-03.md), [checkpoint 4](phase-02-checkpoint-04.md), [checkpoint 5](phase-02-checkpoint-05.md), [checkpoint 6](phase-02-checkpoint-06.md), [checkpoint 7](phase-02-checkpoint-07.md), [checkpoint 8](phase-02-checkpoint-08.md), [checkpoint 9](phase-02-checkpoint-09.md), [checkpoint 10](phase-02-checkpoint-10.md), [checkpoint 11](phase-02-checkpoint-11.md), [checkpoint 12](phase-02-checkpoint-12.md), [checkpoint 13](phase-02-checkpoint-13.md) |
+| [Phase 3](phase-03-controlled-project-intake.md) | In progress | Создание проекта, загрузка поставки, reader-first DWG pipeline, XREF graph и доказательный fidelity gate; [XREF/classification checkpoint](phase-03-checkpoint-xref-classification.md) |
+| [Phase 3, iteration 2](phase-03-iteration-02-intake-assistant.md) | Planned | Ассистент разбора смешанной поставки, XREF assembly, versioned taxonomy и прогон 20 проектов |
+| [Phase 4](phase-04-review-and-planning.md) | Planned | OSM review, нормативный review и первый детерминированный constraint/planting workflow |
+
+## Обязательная структура будущей фазы
+
+1. Status, dates, owners.
+2. Outcome — один проверяемый пользовательский результат.
+3. Accepted ADR prerequisites.
+4. Scope / out of scope.
+5. Data/API contracts.
+6. Tests to write before implementation.
+7. Ordered work packages.
+8. Acceptance matrix requirement → test/evidence.
+9. Risks and rollback/fallback.
+10. Completion report, добавляемый после фактической проверки.
+
+Нельзя переводить фазу в `Complete` по наличию файлов или UI-макета. Требуются работающий запуск, passing tests и сохранённые доказательства.

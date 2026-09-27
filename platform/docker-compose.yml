@@ -1,0 +1,182 @@
+name: greenplan-platform
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-greenplan}
+      POSTGRES_USER: ${POSTGRES_USER:-greenplan}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-greenplan_dev_only}
+    ports:
+      - "${POSTGRES_PORT:-35483}:5432"
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  postgis:
+    image: postgis/postgis:16-3.5-alpine
+    shm_size: 256mb
+    environment:
+      POSTGRES_DB: ${POSTGIS_DB:-greenplan_domain}
+      POSTGRES_USER: ${POSTGIS_USER:-greenplan_domain}
+      POSTGRES_PASSWORD: ${POSTGIS_PASSWORD:-greenplan_domain_dev_only}
+    ports:
+      - "${POSTGIS_PORT:-36483}:5432"
+    volumes:
+      - ./data/postgis:/var/lib/postgresql/data
+      - ./db/postgis-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build:
+      context: ..
+      dockerfile: apps/api/Dockerfile
+    environment:
+      GREENPLAN_DATA_MODE: postgis
+      GREENPLAN_DATABASE_URL: postgresql://${POSTGIS_USER:-greenplan_domain}:${POSTGIS_PASSWORD:-greenplan_domain_dev_only}@postgis:5432/${POSTGIS_DB:-greenplan_domain}
+      GREENPLAN_INTAKE_ROOT: /intake
+      CELERY_BROKER_URL: redis://redis:6379/0
+      LAYA_URL: ${LAYA_URL:-}
+      LAYA_API_KEY: ${LAYA_API_KEY:-}
+      HOME: /tmp
+      XDG_CACHE_HOME: /tmp/.cache
+    user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
+    volumes:
+      - ./data/intake:/intake
+    ports:
+      - "${API_PORT:-38100}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    depends_on:
+      postgis:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  domain-import:
+    build:
+      context: ..
+      dockerfile: apps/api/Dockerfile
+    profiles: ["tools"]
+    user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
+    environment:
+      GREENPLAN_DATABASE_URL: postgresql://${POSTGIS_USER:-greenplan_domain}:${POSTGIS_PASSWORD:-greenplan_domain_dev_only}@postgis:5432/${POSTGIS_DB:-greenplan_domain}
+      DATASET_ROOT: /dataset/Пилотный проект 20 улиц
+    volumes:
+      - ../dataset:/dataset:ro
+    depends_on:
+      postgis:
+        condition: service_healthy
+    entrypoint: ["python", "-m", "greenplan_api.import_pilots"]
+
+  web:
+    build:
+      context: ..
+      dockerfile: apps/web/Dockerfile
+    environment:
+      FASTAPI_INTERNAL_URL: http://api:8000
+      NEXT_TELEMETRY_DISABLED: "1"
+    ports:
+      - "${WEB_PORT:-38101}:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+
+  oda-worker:
+    build:
+      context: ..
+      dockerfile: platform/oda-worker.Dockerfile
+    environment: &worker-env
+      DATABASE_URL: postgresql://${POSTGRES_USER:-greenplan}:${POSTGRES_PASSWORD:-greenplan_dev_only}@postgres:5432/${POSTGRES_DB:-greenplan}
+      DOMAIN_DATABASE_URL: postgresql://${POSTGIS_USER:-greenplan_domain}:${POSTGIS_PASSWORD:-greenplan_domain_dev_only}@postgis:5432/${POSTGIS_DB:-greenplan_domain}
+      CELERY_BROKER_URL: redis://redis:6379/0
+      DATASET_ROOT: /dataset
+      ARCHIVE_ROOT: /archive-extracted
+      WORK_ROOT: /work
+      EXPORT_ROOT: /exports
+      ODA_BIN: /opt/oda/ODAFileConverter
+      ODA_TIMEOUT: ${ODA_TIMEOUT:-900}
+      LIBREDWG_KEEP_JSON: ${LIBREDWG_KEEP_JSON:-false}
+      WORK_KEEP_INPUT: ${WORK_KEEP_INPUT:-false}
+      LIBREDWG_VERSION: ${LIBREDWG_VERSION:-0.14}
+      INTAKE_ROOT: /intake
+    volumes:
+      - ../dataset:/dataset:ro
+      - ${ARCHIVE_ROOT_HOST_DIR:-/tmp/greenplan-archive-extracted-sol}:/archive-extracted:ro
+      - ${WORK_ROOT_HOST_DIR:-./work}:/work
+      - ./exports:/exports
+      - ./app:/app:ro
+      - ./data/intake:/intake
+      - ${ODA_RUNTIME_HOST_DIR:?Set absolute path to extracted ODAFileConverter directory}:/opt/oda:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      postgis:
+        condition: service_healthy
+    working_dir: /app
+    command: ["celery", "-A", "celery_app", "worker", "--loglevel=INFO", "--queues=oda", "--hostname=oda@%h", "--concurrency=2", "--prefetch-multiplier=1"]
+
+  libredwg-worker:
+    build:
+      context: ..
+      dockerfile: platform/libredwg-worker.Dockerfile
+    environment: *worker-env
+    volumes:
+      - ../dataset:/dataset:ro
+      - ${ARCHIVE_ROOT_HOST_DIR:-/tmp/greenplan-archive-extracted-sol}:/archive-extracted:ro
+      - ${WORK_ROOT_HOST_DIR:-./work}:/work
+      - ./app:/app:ro
+      - ./data/intake:/intake
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      postgis:
+        condition: service_healthy
+    working_dir: /app
+    command: ["celery", "-A", "celery_app", "worker", "--loglevel=INFO", "--queues=libredwg", "--hostname=libredwg@%h", "--concurrency=4", "--prefetch-multiplier=1"]
+
+  control:
+    build:
+      context: ..
+      dockerfile: platform/control.Dockerfile
+    profiles: ["tools"]
+    user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
+    environment: *worker-env
+    volumes:
+      # The control command alone materializes verified DXF into per-street dxf/.
+      - ../dataset:/dataset
+      - ${ARCHIVE_ROOT_HOST_DIR:-/tmp/greenplan-archive-extracted-sol}:/archive-extracted:ro
+      - ${WORK_ROOT_HOST_DIR:-./work}:/work
+      - ./exports:/exports
+      - ./app:/app:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    working_dir: /app
+    entrypoint: ["python", "-m", "cli"]

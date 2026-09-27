@@ -1,0 +1,13 @@
+# Input data is always mounted read-only at runtime; never send it as Docker build context.
+dataset/
+reports/
+artifacts/
+.git/
+.agents/
+.codex/
+**/.next/
+**/.pytest_cache/
+**/.uv-cache/
+**/.venv/
+**/__pycache__/
+**/node_modules/

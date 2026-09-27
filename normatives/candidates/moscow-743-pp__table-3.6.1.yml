@@ -1,0 +1,71 @@
+schema_version: 1
+status: needs_expert_review
+source:
+  document_code: moscow-743-pp
+  local_file: raw/moscow-743-pp__checked-2026-09-24.pdf
+  sha256: f5af99982255e6de363543bb2789d395f81a86928c3bebc6ef7ba4a404db2276
+  locator: "п. 3.6.3, таблица 3.6.1"
+  pdf_page: 13
+  heading: "Расстояние от сооружений до посадок растений (МГСН 1.01-99)"
+extraction_note: >-
+  Числа транскрибированы из официального PDF. Это кандидаты, а не approved rules:
+  эксперт должен проверить действительность редакции, область применения, классификацию
+  объектов и все примечания к таблице.
+shared_conditions:
+  - "Нормативы относятся к деревьям с диаметром кроны не более 5 м; для большей кроны расстояние должно быть увеличено, но коэффициент в таблице не задан."
+  - "У наружных стен необходимо соблюдать нормативные уровни инсоляции и естественного освещения."
+candidates:
+  - object_class_hint: structure.building
+    boundary: "наружная стена здания и сооружения"
+    tree_distance_m: 5.0
+    shrub_distance_m: 1.5
+  - object_class_hint: structure.building.education
+    boundary: "наружная стена школьного здания или здания детского сада"
+    tree_distance_m: 10.0
+    shrub_distance_m: 1.5
+  - object_class_hint: transport.tram.track_axis
+    boundary: "ось трамвайных путей"
+    tree_distance_m: 5.0
+    shrub_distance_m: 3.0
+  - object_class_hint: surface.walkway.edge
+    boundary: "край тротуара и садовой дорожки"
+    tree_distance_m: 0.7
+    shrub_distance_m: 0.5
+  - object_class_hint: transport.road.edge
+    boundary: "край проезжей части, укреплённой обочины или бровка канавы"
+    tree_distance_m: 2.0
+    shrub_distance_m: 1.0
+  - object_class_hint: infrastructure.support
+    boundary: "мачта/опора осветительной или трамвайной сети, колонна галереи/эстакады"
+    tree_distance_m: 4.0
+    shrub_distance_m: null
+  - object_class_hint: terrain.slope.toe
+    boundary: "подошва откоса или террасы"
+    tree_distance_m: 1.0
+    shrub_distance_m: 0.5
+  - object_class_hint: structure.retaining_wall
+    boundary: "подошва и внутренняя грань подпорной стенки"
+    tree_distance_m: 3.0
+    shrub_distance_m: 1.0
+  - object_class_hint: utility.gas_or_sewer
+    boundary: "ось подземной коммуникации"
+    tree_distance_m: 1.5
+    shrub_distance_m: null
+  - object_class_hint: utility.heat_or_pipeline
+    boundary: "ось подземной коммуникации"
+    tree_distance_m: 2.0
+    shrub_distance_m: 1.0
+  - object_class_hint: utility.water_or_drainage
+    boundary: "ось подземной коммуникации"
+    tree_distance_m: 2.0
+    shrub_distance_m: null
+  - object_class_hint: utility.power_or_telecom_cable
+    boundary: "ось подземной коммуникации"
+    tree_distance_m: 2.0
+    shrub_distance_m: 0.7
+additional_candidate:
+  object_class_hint: structure.building.residential
+  subject_hint: planting.tree.broad_crown
+  distance_m: 10.0
+  source: "примечание 3 к таблице 3.6.1"
+  condition: "широкая крона затеняет жилые помещения"

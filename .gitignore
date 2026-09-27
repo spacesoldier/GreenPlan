@@ -1,0 +1,48 @@
+# Source datasets and generated delivery bundles are too large for Git.
+/dataset/
+/deliverables/
+
+# Runtime state and generated CAD conversion artifacts.
+/platform/data/
+/platform/work/
+/platform/exports/
+
+# Downloaded third-party binaries and source archives. Keep provenance notes.
+/vendor/libredwg/packages/
+/vendor/libredwg/src/
+/vendor/libredwg/build/
+/vendor/oda/packages/
+/vendor/oda/runtime/
+
+# Secrets and local configuration.
+**/.env
+**/.env.*
+!**/.env.example
+
+# Python build, test, and editor caches.
+**/__pycache__/
+**/*.py[cod]
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+**/.uv-cache/
+**/.venv/
+**/.coverage
+**/htmlcov/
+
+# Node/Next.js build output.
+**/node_modules/
+**/.next/
+**/tsconfig.tsbuildinfo
+**/npm-debug.log*
+
+# Local browser automation evidence and agent state.
+/.playwright-mcp/
+/.agents/
+/.codex/
+
+# OS/editor noise.
+.DS_Store
+Thumbs.db
+*~
+*.swp
