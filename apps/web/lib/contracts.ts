@@ -189,6 +189,32 @@ export type CadInventory = {
   artifact_locator: string | null;
 };
 
+export type CadSpace = {
+  id: string;
+  source_asset_id: string;
+  source_relative_path: string;
+  inventory_stage: string;
+  name: string;
+  space_kind: "model" | "layout";
+  entity_count: number;
+};
+
+export type CadLayer = {
+  id: string;
+  suggestion_id: string;
+  source_asset_id: string;
+  source_relative_path: string;
+  name: string;
+  entity_count: number;
+  mapping_status: string;
+  confidence: number | null;
+  suggested_category: string;
+  method: string;
+  entity_types: Record<string, number>;
+  axis_results: ClassificationSuggestion["axis_results"];
+  review_status: string;
+};
+
 export type ClassificationSuggestion = {
   id: string;
   target_kind: "file" | "cad_layer" | "cad_block" | "cad_text";
@@ -249,6 +275,23 @@ export type IntakeProjectDetail = IntakeProjectSummary & {
   findings: FidelityFinding[];
   master_candidates: MasterCandidate[];
   inventories: CadInventory[];
+  cad_spaces: CadSpace[];
+  cad_layers: CadLayer[];
   classification_suggestions: ClassificationSuggestion[];
   assistant_runs: AssistantRun[];
+  xref_dependencies: CadXrefDependency[];
+};
+
+export type CadXrefDependency = {
+  id: string;
+  source_asset_id: string;
+  source_relative_path: string;
+  referenced_asset_id: string | null;
+  target_relative_path: string | null;
+  reference_name: string;
+  original_path: string | null;
+  status: string;
+  overlay: boolean;
+  placement_count: number;
+  matches: string[];
 };

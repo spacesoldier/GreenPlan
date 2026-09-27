@@ -48,6 +48,11 @@ ADR фиксируют архитектурное решение, его кон�
 | [0021](0021-bounded-project-intake-assistant.md) | Proposed | Ограниченный ассистент превращает delivery в project/XREF/semantic graph и review queue |
 | [0022](0022-versioned-cad-semantic-taxonomy-and-learning-loop.md) | Proposed | Многомерная taxonomy, feature snapshots и контролируемое обучение на review events |
 | [0023](0023-typed-decision-provider-jev-and-laya.md) | Proposed | Provider-neutral typed decisions, benchmark Jev/Laya и rule-only fallback |
+| [0024](0024-prototype-project-soft-delete.md) | Accepted | Обратимое скрытие intake-проектов без потери результатов экспериментов |
+| [0025](0025-folder-ingest-and-visible-xref-dependency-tree.md) | Accepted | Настоящая загрузка каталога и диагностическое дерево XREF текущей поставки |
+| [0026](0026-intake-activity-stream-and-supported-file-boundary.md) | Accepted | Живой журнал обработки и allowlist CAD/табличных файлов intake |
+| [0027](0027-context-first-cad-layer-inspection.md) | Accepted | Контекстный инспектор слоёв и review-корпус до fine-tuning |
+| [0028](0028-cad-workbench-graph-navigation-bulk-review-and-activity-dock.md) | Proposed | CAD workbench, graph/tree navigation, batch review, typed issues и нижний activity dock |
 
 ## Именование
 

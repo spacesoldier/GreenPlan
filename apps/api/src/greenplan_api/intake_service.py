@@ -160,6 +160,13 @@ def media_kind_for(path: str, detected_format: str) -> str:
         ".pdf": "application/pdf",
         ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         ".xls": "application/vnd.ms-excel",
+        ".xlsm": "application/vnd.ms-excel.sheet.macroEnabled.12",
+        ".xlsb": "application/vnd.ms-excel.sheet.binary.macroEnabled.12",
+        ".xlt": "application/vnd.ms-excel",
+        ".xltx": "application/vnd.openxmlformats-officedocument.spreadsheetml.template",
+        ".xltm": "application/vnd.ms-excel.template.macroEnabled.12",
+        ".csv": "text/csv",
+        ".ods": "application/vnd.oasis.opendocument.spreadsheet",
         ".zip": "application/zip",
     }.get(suffix, "application/octet-stream")
 

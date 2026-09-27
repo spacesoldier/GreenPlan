@@ -14,10 +14,13 @@ from .models import (
     FidelityFinding,
     IntakeFile,
     IntakeProjectDetail,
+    CadXrefDependency,
     IntakeProjectSummary,
     IntakeStage,
     MasterCandidate,
     CadInventory,
+    CadLayerView,
+    CadSpaceView,
     ClassificationSuggestionView,
     AssistantRunView,
     AssistantTaskView,
@@ -202,6 +205,37 @@ class PostgisRepository:
             )
             inventories = [CadInventory(**item) for item in cursor.fetchall()]
             cursor.execute(
+                """SELECT cs.id,ci.source_asset_id,de.relative_path AS source_relative_path,
+                          ci.stage AS inventory_stage,cs.name,cs.space_kind,cs.entity_count
+                   FROM intake.cad_spaces cs
+                   JOIN intake.cad_inventories ci ON ci.id=cs.inventory_id
+                   JOIN intake.delivery_entries de ON de.delivery_id=%s
+                                                  AND de.source_asset_id=ci.source_asset_id
+                   WHERE ci.revision_id=%s
+                     AND ci.stage IN ('converted_dxf','uploaded_dxf')
+                   ORDER BY de.relative_path,
+                            CASE cs.space_kind WHEN 'model' THEN 0 ELSE 1 END,cs.name""",
+                (summary.delivery_id, summary.revision_id),
+            )
+            spaces = [CadSpaceView(**item) for item in cursor.fetchall()]
+            cursor.execute(
+                """SELECT cl.id,cs.id AS suggestion_id,cd.source_asset_id,de.relative_path AS source_relative_path,
+                          cl.name,cl.entity_count,cl.mapping_status,cl.confidence::float8 AS confidence,
+                          cs.suggested_category,cs.method,
+                          COALESCE(cs.input_snapshot->'entity_types','{}'::jsonb) AS entity_types,
+                          cs.axis_results,cs.review_status
+                   FROM intake.cad_layers cl
+                   JOIN intake.cad_documents cd ON cd.id=cl.cad_document_id
+                   JOIN intake.delivery_entries de ON de.delivery_id=%s
+                                                  AND de.source_asset_id=cd.source_asset_id
+                   JOIN intake.classification_suggestions cs ON cs.cad_layer_id=cl.id
+                                                            AND cs.revision_id=%s
+                                                            AND cs.method='multi-axis-rules-v2'
+                   ORDER BY de.relative_path,cl.entity_count DESC,cl.name""",
+                (summary.delivery_id, summary.revision_id),
+            )
+            layers = [CadLayerView(**item) for item in cursor.fetchall()]
+            cursor.execute(
                 """SELECT cs.id,cs.target_kind,cs.target_key,cs.source_asset_id,
                           COALESCE(cl.name,de.relative_path,cs.target_key) AS target_label,
                           cs.suggested_category,cs.confidence::float8 AS confidence,
@@ -217,6 +251,28 @@ class PostgisRepository:
                 (summary.delivery_id, summary.revision_id),
             )
             suggestions = [ClassificationSuggestionView(**item) for item in cursor.fetchall()]
+            cursor.execute(
+                """SELECT cx.id,cd.source_asset_id,de.relative_path AS source_relative_path,
+                          cx.referenced_asset_id,target.relative_path AS target_relative_path,
+                          cx.reference_name,cx.original_path,cx.resolved_status AS status,cx.properties
+                   FROM intake.cad_xrefs cx
+                   JOIN intake.cad_documents cd ON cd.id=cx.cad_document_id
+                   JOIN intake.delivery_entries de ON de.delivery_id=%s
+                                                  AND de.source_asset_id=cd.source_asset_id
+                   LEFT JOIN intake.delivery_entries target ON target.delivery_id=%s
+                                                        AND target.source_asset_id=cx.referenced_asset_id
+                   ORDER BY de.relative_path,cx.reference_name,cx.original_path""",
+                (summary.delivery_id, summary.delivery_id),
+            )
+            xrefs = []
+            for item in cursor.fetchall():
+                properties = item.pop("properties") or {}
+                xrefs.append(CadXrefDependency(
+                    **item,
+                    overlay=bool(properties.get("overlay", False)),
+                    placement_count=len(properties.get("placements") or []),
+                    matches=[str(value) for value in properties.get("matches") or []],
+                ))
             cursor.execute(
                 """SELECT id,revision_id,input_fingerprint,schema_version,taxonomy_version,
                           provider_version,state,progress::float8 AS progress,summary,error_summary,
@@ -237,7 +293,9 @@ class PostgisRepository:
             return IntakeProjectDetail(
                 **summary.model_dump(), description=description, files=files, stages=stages,
                 findings=findings, master_candidates=candidates, inventories=inventories,
+                cad_spaces=spaces, cad_layers=layers,
                 classification_suggestions=suggestions, assistant_runs=runs,
+                xref_dependencies=xrefs,
             )
 
     def get_assistant_run(self, run_id: UUID) -> AssistantRunView | None:

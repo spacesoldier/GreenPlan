@@ -251,6 +251,32 @@ class CadInventory(ApiModel):
     artifact_locator: str | None = None
 
 
+class CadSpaceView(ApiModel):
+    id: UUID
+    source_asset_id: UUID
+    source_relative_path: str
+    inventory_stage: str
+    name: str
+    space_kind: str
+    entity_count: int
+
+
+class CadLayerView(ApiModel):
+    id: UUID
+    suggestion_id: UUID
+    source_asset_id: UUID
+    source_relative_path: str
+    name: str
+    entity_count: int
+    mapping_status: str
+    confidence: float | None = None
+    suggested_category: str
+    method: str
+    entity_types: dict[str, int] = Field(default_factory=dict)
+    axis_results: dict[str, Any] = Field(default_factory=dict)
+    review_status: str
+
+
 class ClassificationSuggestionView(ApiModel):
     id: UUID
     target_kind: str
@@ -306,6 +332,20 @@ class ClassificationReviewRequest(ApiModel):
     comment: str | None = Field(default=None, max_length=2000)
 
 
+class CadXrefDependency(ApiModel):
+    id: UUID
+    source_asset_id: UUID
+    source_relative_path: str
+    referenced_asset_id: UUID | None = None
+    target_relative_path: str | None = None
+    reference_name: str
+    original_path: str | None = None
+    status: str
+    overlay: bool = False
+    placement_count: int = 0
+    matches: list[str] = Field(default_factory=list)
+
+
 class IntakeProjectDetail(IntakeProjectSummary):
     description: str | None = None
     files: list[IntakeFile] = Field(default_factory=list)
@@ -313,8 +353,11 @@ class IntakeProjectDetail(IntakeProjectSummary):
     findings: list[FidelityFinding] = Field(default_factory=list)
     master_candidates: list[MasterCandidate] = Field(default_factory=list)
     inventories: list[CadInventory] = Field(default_factory=list)
+    cad_spaces: list[CadSpaceView] = Field(default_factory=list)
+    cad_layers: list[CadLayerView] = Field(default_factory=list)
     classification_suggestions: list[ClassificationSuggestionView] = Field(default_factory=list)
     assistant_runs: list[AssistantRunView] = Field(default_factory=list)
+    xref_dependencies: list[CadXrefDependency] = Field(default_factory=list)
 
 
 class IntakeUploadResult(ApiModel):

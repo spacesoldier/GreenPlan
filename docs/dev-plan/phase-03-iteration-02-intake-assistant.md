@@ -262,3 +262,38 @@ frozen/gold manifests и сравнительный прогон всех 20 п�
 XREF graph и versioned layer suggestions; хотя бы два проекта с XREF опубликованы из assembled
 preview; acceptance report содержит baseline, итоговые метрики, dangerous errors, время review
 и список оставшихся неподдержанных сущностей.
+
+## Implementation checkpoint — directory ingest и XREF visibility
+
+Принят [ADR-0025](../adr/0025-folder-ingest-and-visible-xref-dependency-tree.md). В intake vertical
+slice добавлены следующие контракты:
+
+- directory picker обязан передать `webkitRelativePath`; обычный multi-file picker не может
+  незаметно выдать себя за folder upload;
+- delivery-relative path сохраняется при загрузке каждого вложенного файла;
+- область XREF resolution ограничена текущей delivery и явно показана пользователю;
+- API detail возвращает направленные XREF edges с source, target, original path, status,
+  candidates и placements;
+- UI показывает дерево зависимостей по исходным DWG и технический журнал по попыткам этапов.
+
+Проверочный кейс «Старый Гай» подтвердил назначение контракта: три отдельно выбранных головных
+DWG не включали находящиеся рядом `03_Подгрузки/Вешняковская ул..dwg`,
+`03_Подгрузки/Дендрология.dwg` и `3ДЖКХ-24_02797/output[1-8]_3_ДЖКХ-24_02797kl.dwg`.
+Статус `missing` в таком случае является корректной диагностикой неполной delivery, а не
+ошибкой конвертации.
+
+### Activity stream и file boundary
+
+По [ADR-0026](../adr/0026-intake-activity-stream-and-supported-file-boundary.md) правая колонка
+получает живой журнал upload/assistant/processing событий. Folder upload до передачи данных
+оставляет только DWG, DXF и поддерживаемые spreadsheet formats; число остальных файлов
+сообщается без создания source assets. Центральный технический журнал остаётся источником
+полного stdout/stderr, правый stream служит оперативной сводкой.
+
+### Layer inspector baseline
+
+По [ADR-0027](../adr/0027-context-first-cad-layer-inspection.md) detail API и intake UI публикуют
+нормализованные CAD spaces и layers: документ, Model/layout, entity count/type histogram,
+multi-axis rule result и review status. Это baseline для сбора gold labels. Подключение Laya и
+тем более fine-tuning выполняются только после project-split benchmark; следующим data package
+будут viewport visibility, block/text samples, stamp и legend candidates.

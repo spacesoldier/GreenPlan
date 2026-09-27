@@ -7,6 +7,7 @@ from greenplan_api.intake_service import (
     candidate_score,
     detect_cad_format,
     dxf_inventory,
+    media_kind_for,
     normalize_relative_path,
     store_stream,
     safe_archive_member,
@@ -92,6 +93,7 @@ def test_dxf_inventory_sees_model_layout_layers_hatch_and_xref(tmp_path):
         ("Проектное решение/Xrefs/roads.dwg", "dwg", "xref_dependency"),
         ("Архив/вариант 2024.zip", "unknown", "archive"),
         ("Обследование/перечетная ведомость.xlsx", "unknown", "register"),
+        ("Обследование/перечетная ведомость.xlsm", "unknown", "register"),
     ],
 )
 def test_delivery_classifier_is_explainable(path, detected, category):
@@ -99,6 +101,19 @@ def test_delivery_classifier_is_explainable(path, detected, category):
     assert suggestion.category == category
     assert suggestion.confidence >= 0.5
     assert suggestion.cues
+
+
+@pytest.mark.parametrize(
+    ("path", "media_kind"),
+    [
+        ("register.xls", "application/vnd.ms-excel"),
+        ("register.xlsm", "application/vnd.ms-excel.sheet.macroEnabled.12"),
+        ("register.xlsb", "application/vnd.ms-excel.sheet.binary.macroEnabled.12"),
+        ("register.ods", "application/vnd.oasis.opendocument.spreadsheet"),
+    ],
+)
+def test_spreadsheet_media_kinds(path, media_kind):
+    assert media_kind_for(path, "unknown") == media_kind
 
 
 def test_unclear_delivery_entry_is_sent_to_model_assist():

@@ -69,7 +69,7 @@ def classify_delivery_path(path: str, detected_format: str = "unknown") -> Class
         if token in value:
             add(category, points, token.strip("/ "))
 
-    if suffix in {".xlsx", ".xls", ".csv"}:
+    if suffix in {".xls", ".xlsx", ".xlsm", ".xlsb", ".xlt", ".xltx", ".xltm", ".csv", ".ods"}:
         add("register", 0.25, "tabular file")
     if detected_format in {"dwg", "dxf"} and re.search(r"(?:^|[_\s-])гп(?:[_\s.-]|$)", name):
         add("project_solution", 0.62, "ГП in CAD filename")
