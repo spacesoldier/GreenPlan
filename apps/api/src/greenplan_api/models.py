@@ -226,6 +226,7 @@ class FidelityFinding(ApiModel):
     detail: str
     evidence: dict[str, Any] = Field(default_factory=dict)
     status: str
+    resolution: dict[str, Any] = Field(default_factory=dict)
 
 
 class MasterCandidate(ApiModel):
@@ -330,6 +331,18 @@ class ClassificationReviewRequest(ApiModel):
     decision: Literal["accept", "reject"]
     category: str | None = Field(default=None, max_length=160)
     comment: str | None = Field(default=None, max_length=2000)
+
+
+class ClassificationBatchReviewRequest(ApiModel):
+    suggestion_ids: list[UUID] = Field(min_length=1, max_length=1000)
+    decision: Literal["accept", "reject"]
+    category: str | None = Field(default=None, max_length=160)
+    comment: str | None = Field(default=None, max_length=2000)
+
+
+class FindingResolutionRequest(ApiModel):
+    action: Literal["waive", "reopen", "block"]
+    reason: str = Field(min_length=3, max_length=2000)
 
 
 class CadXrefDependency(ApiModel):

@@ -20,6 +20,8 @@ from .models import (
     IntakeProjectList,
     IntakeReviewRequest,
     ClassificationReviewRequest,
+    ClassificationBatchReviewRequest,
+    FindingResolutionRequest,
     AssistantRunView,
     IntakeUploadResult,
     ModelList,
@@ -41,6 +43,8 @@ from .intake_service import (
     register_upload,
     review_revision,
     review_classification,
+    review_classifications_batch,
+    resolve_finding,
     soft_delete_project,
     store_stream,
 )
@@ -325,6 +329,36 @@ def create_app(repository: Repository | None = None) -> FastAPI:
         except KeyError as exc:
             raise ApiError(404, "classification_not_found", "classification suggestion does not exist") from exc
         return {"status": "recorded", "suggestion_id": str(suggestion_id)}
+
+    @app.post("/v1/intake/projects/{project_id}/classifications/batch-review", tags=["intake"])
+    def review_intake_classifications_batch(
+        project_id: UUID, payload: ClassificationBatchReviewRequest, repo: Repo,
+    ):
+        database_url, _workspace_code, _root = intake_settings(repo)
+        if repo.get_intake_project(project_id) is None:
+            raise ApiError(404, "project_not_found", "intake project does not exist")
+        try:
+            batch_id = review_classifications_batch(
+                database_url, project_id, payload.suggestion_ids, payload.decision,
+                payload.category, payload.comment,
+            )
+        except KeyError as exc:
+            raise ApiError(404, "classification_not_found", str(exc)) from exc
+        except IntakeConflict as exc:
+            raise ApiError(409, "batch_review_conflict", str(exc)) from exc
+        return {"status": "recorded", "batch_id": str(batch_id), "count": len(payload.suggestion_ids)}
+
+    @app.post("/v1/intake/projects/{project_id}/findings/{finding_id}/resolve", tags=["intake"])
+    def resolve_intake_finding(
+        project_id: UUID, finding_id: UUID, payload: FindingResolutionRequest, repo: Repo,
+    ):
+        database_url, _workspace_code, _root = intake_settings(repo)
+        if repo.get_intake_project(project_id) is None:
+            raise ApiError(404, "project_not_found", "intake project does not exist")
+        try:
+            return resolve_finding(database_url, project_id, finding_id, payload.action, payload.reason)
+        except KeyError as exc:
+            raise ApiError(404, "finding_not_found", "finding does not exist") from exc
 
     @app.post("/v1/intake/projects/{project_id}/publish", response_model=IntakeActionResult, tags=["intake"])
     def publish_intake_project(project_id: UUID, repo: Repo):

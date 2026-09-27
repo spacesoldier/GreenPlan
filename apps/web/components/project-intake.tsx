@@ -6,6 +6,7 @@ import { useCallback, useEffect, useState, type InputHTMLAttributes } from "reac
 import type { IntakeProjectDetail } from "@/lib/contracts";
 import { domainJson, formatBytes } from "@/lib/domain-client";
 import { inspectFolderSelection, isSupportedProjectFile, partitionProjectFiles, relativeUploadPath } from "@/lib/folder-selection";
+import { buildDeliveryTree, groupLayerFamilies, type DeliveryTreeNode } from "@/lib/cad-workbench";
 
 const stateLabels: Record<string, string> = {
   draft: "Черновик", receiving: "Приём файлов", analyzing: "Анализ",
@@ -21,6 +22,8 @@ const projectFileAccept = ".dwg,.dxf,.xls,.xlsx,.xlsm,.xlsb,.xlt,.xltx,.xltm,.cs
 
 const stageLabels: Record<string, string> = {
   direct_read: "Прямое чтение DWG", conversion: "Конвертация ODA → DXF",
+  direct_dwg_read: "Прямое чтение DWG", oda_conversion: "Конвертация ODA → DXF",
+  converted_dxf_inventory: "Инвентаризация полученного DXF", uploaded_dxf_inventory: "Инвентаризация загруженного DXF",
   dxf_inventory: "Инвентаризация DXF", xref_resolution: "Разрешение XREF",
   fidelity_check: "Проверка полноты", classification: "Классификация",
 };
@@ -29,12 +32,25 @@ function xrefIdentity(path: string | null, name: string): string {
   return (path || name).replaceAll("\\", "/").replace(/^\.\.\//, "").toLocaleLowerCase();
 }
 
+function DeliveryNodes({ nodes }: { nodes: DeliveryTreeNode[] }) {
+  return <>{nodes.map((node) => node.kind === "folder"
+    ? <details className="wb-tree-folder" key={node.id} open><summary><span>⌄</span>{node.label}<small>{node.children.length}</small></summary><div><DeliveryNodes nodes={node.children} /></div></details>
+    : <button className="wb-tree-file" key={node.id}><span>{node.label.toLocaleLowerCase().endsWith(".dwg") ? "DWG" : node.label.split(".").pop()?.toUpperCase()}</span><b>{node.label}</b></button>)}</>;
+}
+
 export function ProjectIntake({ projectId }: { projectId: string }) {
   const [project, setProject] = useState<IntakeProjectDetail | null>(null);
   const [selectedMaster, setSelectedMaster] = useState("");
   const [layerDocument, setLayerDocument] = useState("");
   const [layerQuery, setLayerQuery] = useState("");
   const [layerMode, setLayerMode] = useState<"all" | "unknown" | "reviewed">("unknown");
+  const [workbenchView, setWorkbenchView] = useState<"materials" | "explorer" | "issues" | "publish">("explorer");
+  const [selectedLayerIds, setSelectedLayerIds] = useState<string[]>([]);
+  const [bulkCategory, setBulkCategory] = useState("utility.unknown");
+  const [selectedFindingId, setSelectedFindingId] = useState("");
+  const [findingReason, setFindingReason] = useState("Ограничение принято для текущей редакции.");
+  const [dockExpanded, setDockExpanded] = useState(true);
+  const [selectedActivityId, setSelectedActivityId] = useState("");
   const [comment, setComment] = useState("Проверено инженером; ограничения преобразования приняты.");
   const [busy, setBusy] = useState("");
   const [uploadProgress, setUploadProgress] = useState<[number, number] | null>(null);
@@ -119,6 +135,23 @@ export function ProjectIntake({ projectId }: { projectId: string }) {
     });
   }
 
+  async function reviewSelectedLayers(decision: "accept" | "reject") {
+    if (!selectedLayerIds.length) return;
+    await action("batch-classification", `/v1/intake/projects/${projectId}/classifications/batch-review`, {
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ suggestion_ids: selectedLayerIds, decision, category: decision === "accept" ? bulkCategory : null, comment: "Массовая проверка в CAD workbench" }),
+    });
+    setSelectedLayerIds([]);
+  }
+
+  async function resolveSelectedFinding(actionName: "waive" | "reopen" | "block") {
+    if (!selectedFindingId) return;
+    await action("finding-resolution", `/v1/intake/projects/${projectId}/findings/${selectedFindingId}/resolve`, {
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: actionName, reason: findingReason }),
+    });
+  }
+
   if (!project) return <main className="intake-loading"><span className="loader" /><strong>{error || "Открываем проект…"}</strong></main>;
   const mayAnalyze = project.file_count > 0 && !["analyzing", "published"].includes(project.intake_state);
   const assistantRun = project.assistant_runs[0];
@@ -146,18 +179,20 @@ export function ProjectIntake({ projectId }: { projectId: string }) {
     .filter((item) => item.stage === "converted_dxf" && item.artifact_locator)
     .map((item) => [item.source_asset_id, item.artifact_locator]));
   const activityEvents = [
-    ...(liveUpload ? [{ id: "live-upload", state: liveUpload.state, title: liveUpload.title, detail: liveUpload.detail, at: liveUpload.at }] : []),
+    ...(liveUpload ? [{ id: "live-upload", state: liveUpload.state, title: liveUpload.title, detail: liveUpload.detail, at: liveUpload.at, metrics: {}, stdout: "", stderr: "" }] : []),
     ...project.stages.map((stage) => ({
       id: stage.id,
       state: stage.state,
       title: stageLabels[stage.stage] || stage.stage.replaceAll("_", " "),
       detail: `${filePathById.get(stage.source_asset_id || "") || "Весь проект"} · попытка ${stage.attempt_no}${convertedByAsset.get(stage.source_asset_id || "") ? ` · ${convertedByAsset.get(stage.source_asset_id || "")}` : ""}`,
       at: stage.finished_at || stage.started_at || stage.created_at,
+      metrics: stage.metrics, stdout: stage.stdout, stderr: stage.stderr,
     })),
     ...(assistantRun?.tasks || []).map((task) => ({
       id: `task-${task.id}`, state: task.state, title: task.title,
       detail: task.error_summary || `Попыток: ${task.attempts} · ${Math.round(task.progress * 100)}%`,
       at: task.finished_at || task.started_at || assistantRun.created_at,
+      metrics: { progress: task.progress, attempts: task.attempts, dependencies: task.dependencies }, stdout: "", stderr: task.error_summary || "",
     })),
   ].sort((left, right) => Date.parse(right.at) - Date.parse(left.at)).slice(0, 40);
   const layerDocuments = Array.from(new Map(project.cad_layers.map((layer) => [layer.source_asset_id, layer.source_relative_path])).entries());
@@ -168,6 +203,11 @@ export function ProjectIntake({ projectId }: { projectId: string }) {
     if (layerMode === "reviewed" && layer.review_status === "pending") return false;
     return !layerQuery || layer.name.toLocaleLowerCase().includes(layerQuery.toLocaleLowerCase());
   });
+  const deliveryTree = buildDeliveryTree(visibleFiles);
+  const layerFamilies = [...groupLayerFamilies(selectedLayers).entries()];
+  const selectedFinding = project.findings.find((finding) => finding.id === selectedFindingId) || project.findings[0];
+  const selectedFindingInventories = project.inventories.filter((item) => item.source_asset_id === selectedFinding?.source_asset_id);
+  const selectedActivity = activityEvents.find((event) => event.id === selectedActivityId) || activityEvents[0];
 
   return (
     <main className="intake-page">
@@ -182,8 +222,16 @@ export function ProjectIntake({ projectId }: { projectId: string }) {
         <div className="intake-hero-status"><span className={`intake-state state-${project.intake_state}`}>{stateLabels[project.intake_state] ?? project.intake_state}</span><strong>{project.file_count}</strong><small>файлов · {formatBytes(project.total_bytes)}</small></div>
       </section>
 
-      <section className="intake-layout">
+      <section className="intake-layout workbench-layout">
+        <nav className="wb-nav" aria-label="Разделы проекта">
+          <span>Рабочая область</span>
+          <button className={workbenchView === "materials" ? "active" : ""} onClick={() => setWorkbenchView("materials")}><i>01</i><b>Материалы</b><small>{project.file_count} файлов</small></button>
+          <button className={workbenchView === "explorer" ? "active" : ""} onClick={() => setWorkbenchView("explorer")}><i>02</i><b>CAD Explorer</b><small>{project.cad_layers.length} слоёв</small></button>
+          <button className={workbenchView === "issues" ? "active" : ""} onClick={() => setWorkbenchView("issues")}><i>03</i><b>Проблемы</b><small>{project.findings.filter((item) => item.status === "open").length} открыто</small></button>
+          <button className={workbenchView === "publish" ? "active" : ""} onClick={() => setWorkbenchView("publish")}><i>04</i><b>Публикация</b><small>{project.fidelity_verdict || "нет вердикта"}</small></button>
+        </nav>
         <div className="intake-main">
+          {workbenchView === "materials" && <>
           <article className="intake-card upload-card">
             <div className="card-heading"><div><span>01</span><h2>Исходные материалы</h2></div><p>Структура папок и контрольные суммы сохраняются как доказательство поставки.</p></div>
             <div className="upload-actions">
@@ -215,7 +263,9 @@ export function ProjectIntake({ projectId }: { projectId: string }) {
               ))}
             </div>
           </article>
+          </>}
 
+          {workbenchView === "explorer" && <>
           <article className="intake-card xref-card">
             <div className="card-heading"><div><span>03</span><h2>Связи файлов · XREF</h2></div><p>Дерево показывает, какой DWG подключает зависимость, где она ожидалась и нашёлся ли файл в поставке.</p></div>
             <div className="xref-summary"><span><b>{project.xref_dependencies.length}</b> ссылок</span><span className="resolved"><b>{xrefCounts.resolved || 0}</b> найдены</span><span className="missing"><b>{xrefCounts.missing || 0}</b> отсутствуют</span><span className="ambiguous"><b>{xrefCounts.ambiguous || 0}</b> неоднозначны</span></div>
@@ -240,14 +290,21 @@ export function ProjectIntake({ projectId }: { projectId: string }) {
               <label><span>Поиск слоя</span><input value={layerQuery} onChange={(event) => setLayerQuery(event.target.value)} placeholder="деревья, кабель…" /></label>
               <div className="layer-modes"><button className={layerMode === "unknown" ? "active" : ""} onClick={() => setLayerMode("unknown")}>Не разобраны</button><button className={layerMode === "all" ? "active" : ""} onClick={() => setLayerMode("all")}>Все</button><button className={layerMode === "reviewed" ? "active" : ""} onClick={() => setLayerMode("reviewed")}>Проверены</button></div>
             </div>
+            <div className="bulk-review-bar"><span>Выбрано: <b>{selectedLayerIds.length}</b></span><select value={bulkCategory} onChange={(event) => setBulkCategory(event.target.value)}><option value="utility.unknown">Инженерные сети</option><option value="transport.road">Дороги и проезды</option><option value="surface.lawn">Покрытия и газоны</option><option value="vegetation.existing">Существующая растительность</option><option value="vegetation.proposed">Проектируемая растительность</option><option value="structure.building">Здания и сооружения</option><option value="terrain">Рельеф</option><option value="territory.work_boundary">Границы и зоны</option><option value="not_applicable">Служебное / неприменимо</option><option value="unknown">Не определено</option></select><button disabled={!selectedLayerIds.length || !!busy} onClick={() => reviewSelectedLayers("reject")}>Отклонить</button><button className="action-primary" disabled={!selectedLayerIds.length || !!busy} onClick={() => reviewSelectedLayers("accept")}>Назначить категорию</button></div>
             <div className="space-strip">{selectedSpaces.map((space) => <div className={`space-chip space-${space.space_kind}`} key={space.id}><b>{space.space_kind === "model" ? "MODEL" : "ЛИСТ"}</b><span>{space.name}</span><small>{space.entity_count.toLocaleString("ru-RU")} объектов</small></div>)}{!selectedSpaces.length && <p className="empty-line">Пространства документа не найдены.</p>}</div>
-            <div className="layer-table"><header><span>Слой</span><span>Состав</span><span>Классификация</span><span>Review</span></header>{selectedLayers.map((layer) => {
+            <div className="layer-table"><header><span>Слой / семейство</span><span>Состав</span><span>Классификация</span><span>Выбор</span></header>{layerFamilies.map(([familyKey, members]) => {
+              const layer = members[0];
               const axes = layer.axis_results.axes;
-              return <div className="layer-row" key={layer.id}><div><strong>{layer.name}</strong><small>{layer.entity_count.toLocaleString("ru-RU")} объектов · {Math.round((layer.confidence || 0) * 100)}%</small></div><div className="entity-tags">{Object.entries(layer.entity_types).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([kind, count]) => <span key={kind}>{kind} <b>{count}</b></span>)}</div><div className="axis-grid">{axes ? Object.entries(axes).slice(0, 4).map(([axis, value]) => <span key={axis}><em>{axis}</em>{value.label}</span>) : <span>{layer.suggested_category}</span>}</div><div className="layer-review"><button disabled={!!busy || layer.review_status !== "pending"} onClick={() => reviewClassification(layer.suggestion_id, "reject")}>×</button><button className="classification-accept" disabled={!!busy || layer.review_status !== "pending"} onClick={() => reviewClassification(layer.suggestion_id, "accept")}>✓</button></div></div>;
+              const suggestionIds = members.filter((item) => item.review_status === "pending").map((item) => item.suggestion_id);
+              const selected = suggestionIds.length > 0 && suggestionIds.every((id) => selectedLayerIds.includes(id));
+              return <div className="layer-row" key={familyKey}><div><strong>{layer.name}</strong><small>{members.reduce((sum, item) => sum + item.entity_count, 0).toLocaleString("ru-RU")} объектов · {members.length} в семействе · {Math.round((layer.confidence || 0) * 100)}%</small></div><div className="entity-tags">{Object.entries(layer.entity_types).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([kind, count]) => <span key={kind}>{kind} <b>{count}</b></span>)}</div><div className="axis-grid">{axes ? Object.entries(axes).slice(0, 4).map(([axis, value]) => <span key={axis}><em>{axis}</em>{value.label}</span>) : <span>{layer.suggested_category}</span>}</div><div className="layer-family-select"><input type="checkbox" aria-label={`Выбрать семейство ${layer.name}`} disabled={!suggestionIds.length} checked={selected} onChange={() => setSelectedLayerIds((current) => selected ? current.filter((id) => !suggestionIds.includes(id)) : Array.from(new Set([...current, ...suggestionIds])))} /><small>{suggestionIds.length || "✓"}</small></div></div>;
             })}{!selectedLayers.length && <p className="empty-line">В выбранном режиме слоёв нет.</p>}</div>
           </article>
+          </>}
 
-          <article className="intake-card">
+          {workbenchView === "issues" && <article className="intake-card issues-workbench"><div className="card-heading"><div><span>03</span><h2>Проблемы и ограничения</h2></div><p>Выберите проблему слева: справа появятся evidence, действия и последствия решения.</p></div><div className="issue-split"><div className="issue-queue">{project.findings.map((finding) => <button className={`${finding.id === selectedFinding?.id ? "active" : ""} issue-${finding.severity}`} key={finding.id} onClick={() => setSelectedFindingId(finding.id)}><i /><span><strong>{finding.title}</strong><small>{finding.code} · {finding.status}</small></span></button>)}</div>{selectedFinding ? <section className="issue-detail"><header><span>{selectedFinding.severity}</span><h3>{selectedFinding.title}</h3><p>{selectedFinding.detail}</p></header><dl><div><dt>Этап</dt><dd>{selectedFinding.stage}</dd></div><div><dt>Код</dt><dd>{selectedFinding.code}</dd></div><div><dt>Статус</dt><dd>{selectedFinding.status}</dd></div></dl>{selectedFindingInventories.length > 0 && <div className="fidelity-comparison">{selectedFindingInventories.map((inventory) => <div key={inventory.id}><header><b>{inventory.stage}</b><span>{inventory.tool_name || inventory.format}</span></header><dl><div><dt>Объекты</dt><dd>{String(inventory.metrics.entity_count ?? "—")}</dd></div><div><dt>Слои</dt><dd>{String(inventory.metrics.layer_count ?? "—")}</dd></div><div><dt>Листы</dt><dd>{String(inventory.metrics.layout_count ?? "—")}</dd></div></dl>{inventory.artifact_locator && <code>{inventory.artifact_locator}</code>}</div>)}</div>}<details open><summary>Evidence</summary><pre>{JSON.stringify(selectedFinding.evidence, null, 2)}</pre></details>{selectedFinding.resolution?.reason && <div className="issue-resolution"><b>{selectedFinding.resolution.action}</b><p>{selectedFinding.resolution.reason}</p></div>}<label className="issue-reason">Обоснование решения<textarea rows={3} value={findingReason} onChange={(event) => setFindingReason(event.target.value)} /></label><div className="issue-actions"><button disabled={!!busy} onClick={() => action("retry-search", `/v1/intake/projects/${projectId}/assistant-runs`)}>Повторить поиск/анализ</button><button onClick={() => resolveSelectedFinding("reopen")}>Вернуть в работу</button><button className="reject-button" onClick={() => resolveSelectedFinding("block")}>Блокировать</button><button className="action-primary" onClick={() => resolveSelectedFinding("waive")}>Игнорировать в редакции</button></div></section> : <p className="empty-line">Проблем нет.</p>}</div></article>}
+
+          {workbenchView === "publish" && <article className="intake-card">
             <div className="card-heading"><div><span>05</span><h2>Вердикт и публикация</h2></div><p>Мастер выбирает человек. Неоднозначности и потери остаются видимыми в журнале.</p></div>
             <div className="candidate-list">
               {project.master_candidates.map((candidate) => <label className={`candidate-row ${selectedMaster === candidate.source_asset_id ? "selected" : ""}`} key={candidate.source_asset_id}><input type="radio" name="master" checked={selectedMaster === candidate.source_asset_id} onChange={() => setSelectedMaster(candidate.source_asset_id)} /><div><strong>{candidate.relative_path}</strong><small>{candidate.role.replaceAll("_", " ")} · признаки: {candidate.cues.join(", ") || "нет"}</small></div><b>{candidate.score.toFixed(0)}</b></label>)}
@@ -255,16 +312,16 @@ export function ProjectIntake({ projectId }: { projectId: string }) {
             </div>
             {project.intake_state === "review_required" && <div className="review-box">{project.critical_count > 0 && <p className="review-blocked-note">Сначала устраните {project.critical_count} критических замечаний и запустите анализ повторно.</p>}<label>Комментарий инженерной проверки<textarea value={comment} onChange={(event) => setComment(event.target.value)} rows={3} /></label><div><button className="reject-button" disabled={!!busy} onClick={() => action("reject", `/v1/intake/projects/${projectId}/review`, { headers: { "Content-Type": "application/json" }, body: JSON.stringify({ decision: "reject", comment, selected_master_asset_id: selectedMaster || null }) })}>Отклонить</button><button className="action-primary" disabled={!mayReview || comment.length < 3 || !!busy} onClick={() => action("review", `/v1/intake/projects/${projectId}/review`, { headers: { "Content-Type": "application/json" }, body: JSON.stringify({ decision: "accept", comment, selected_master_asset_id: selectedMaster }) })}>Принять с фиксацией</button></div></div>}
             {project.intake_state === "ready_to_publish" && <button className="action-primary publish-button" disabled={!!busy} onClick={() => action("publish", `/v1/intake/projects/${projectId}/publish`)}>Опубликовать каноническую модель</button>}
-          </article>
+          </article>}
         </div>
 
         <aside className="intake-aside">
-          <article className="intake-card activity-card"><div className="activity-heading"><div><i className={assistantActive || busy === "upload" ? "is-live" : ""} /><h3>Журнал действий</h3></div><span>{assistantActive || busy === "upload" ? "выполняется" : "последние события"}</span></div><div className="activity-stream">{activityEvents.map((event) => <div className={`activity-event activity-${event.state}`} key={event.id}><i /><time>{new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(event.at))}</time><div><strong>{event.title}</strong><small title={event.detail}>{event.detail}</small></div></div>)}{!activityEvents.length && <p className="empty-line">События появятся после загрузки файлов.</p>}</div></article>
+          {workbenchView === "materials" && <article className="intake-card"><h3>Дерево поставки</h3><div className="delivery-tree"><DeliveryNodes nodes={deliveryTree} /></div></article>}
+          {workbenchView === "explorer" && <article className="intake-card"><h3>CAD-граф</h3><div className="cad-nav-tree">{layerDocuments.map(([assetId, path]) => { const refs = xrefsBySource.get(assetId) || []; return <details key={assetId} open={assetId === layerDocument}><summary onClick={() => setLayerDocument(assetId)}><span>DWG</span><b>{path}</b></summary><button onClick={() => setLayerDocument(assetId)}>▦ Пространства <small>{project.cad_spaces.filter((item) => item.source_asset_id === assetId).length}</small></button><button onClick={() => setLayerDocument(assetId)}>≡ Слои <small>{project.cad_layers.filter((item) => item.source_asset_id === assetId).length}</small></button><div className="cad-ref-branch"><em>Внешние ссылки</em>{refs.map((xref) => <button className={`ref-${xref.status}`} key={xref.id} title={xref.original_path || ""} disabled={!xref.referenced_asset_id} onClick={() => xref.referenced_asset_id && setLayerDocument(xref.referenced_asset_id)}><span>↗</span><b>{xref.reference_name}</b><small>{xref.target_relative_path ? "alias → " + xref.target_relative_path : xref.status}</small></button>)}</div></details>; })}</div></article>}
           <article className="intake-card"><h3>Контроль качества</h3><div className="quality-metrics"><div><strong>{project.cad_count}</strong><span>CAD-файлов</span></div><div><strong>{project.finding_count}</strong><span>наблюдений</span></div><div className={project.critical_count ? "danger" : ""}><strong>{project.critical_count}</strong><span>критических</span></div></div><p className="verdict">Вердикт <b>{project.fidelity_verdict?.replaceAll("_", " ") || "ещё не сформирован"}</b></p></article>
-          <article className="intake-card"><h3>Наблюдения</h3><div className="finding-list">{project.findings.map((finding) => <div className={`finding finding-${finding.severity}`} key={finding.id}><span>{finding.severity}</span><strong>{finding.title}</strong><p>{finding.detail}</p></div>)}{!project.findings.length && <p className="empty-line">Пока замечаний нет.</p>}</div></article>
-          <article className="intake-card"><h3>Инвентаризация CAD</h3><div className="inventory-list">{project.inventories.map((inventory) => <div key={inventory.id}><strong>{inventory.relative_path}</strong><span>{inventory.stage} · {inventory.parse_status}</span><small>{String(inventory.metrics.entity_count ?? "—")} объектов · {String(inventory.metrics.layer_count ?? "—")} слоёв · {String(inventory.metrics.layout_count ?? "—")} листов</small></div>)}{!project.inventories.length && <p className="empty-line">Нет результатов.</p>}</div></article>
         </aside>
       </section>
+      <section className={`activity-dock ${dockExpanded ? "expanded" : "collapsed"}`}><button className="activity-dock-toggle" onClick={() => setDockExpanded((value) => !value)}><i className={assistantActive || busy === "upload" ? "is-live" : ""} /><b>Журнал действий</b><span>{selectedActivity?.title || "Событий пока нет"}</span><em>{activityEvents.length}</em><strong>{dockExpanded ? "⌄" : "⌃"}</strong></button>{dockExpanded && <div className="activity-dock-body"><div className="activity-stream">{activityEvents.map((event) => <button className={`activity-event activity-${event.state} ${event.id === selectedActivity?.id ? "selected" : ""}`} key={event.id} onClick={() => setSelectedActivityId(event.id)}><i /><time>{new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(event.at))}</time><div><strong>{event.title}</strong><small>{event.detail}</small></div></button>)}</div><aside>{selectedActivity ? <><span>{selectedActivity.state}</span><h3>{selectedActivity.title}</h3><p>{selectedActivity.detail}</p><dl><div><dt>Время</dt><dd>{new Date(selectedActivity.at).toLocaleString("ru-RU")}</dd></div><div><dt>ID события</dt><dd>{selectedActivity.id}</dd></div></dl><details open><summary>Метрики</summary><pre>{JSON.stringify(selectedActivity.metrics, null, 2)}</pre></details>{(selectedActivity.stderr || selectedActivity.stdout) && <details><summary>Технический вывод</summary><pre>{selectedActivity.stderr || selectedActivity.stdout}</pre></details>}<p className="activity-hint">Artifact locator показан в описании завершённой конвертации.</p></> : <p>Выберите событие.</p>}</aside></div>}</section>
       {error && <div className="toast-error" role="alert">{error}<button onClick={() => setError("")}>×</button></div>}
     </main>
   );

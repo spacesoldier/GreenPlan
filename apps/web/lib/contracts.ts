@@ -164,6 +164,7 @@ export type FidelityFinding = {
   detail: string;
   evidence: Record<string, unknown>;
   status: string;
+  resolution: { action?: string; reason?: string; impact?: Record<string, unknown>; created_at?: string };
 };
 
 export type MasterCandidate = {

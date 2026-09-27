@@ -1057,6 +1057,129 @@ def review_classification(
         )
 
 
+def review_classifications_batch(
+    database_url: str,
+    project_id: UUID,
+    suggestion_ids: list[UUID],
+    decision: str,
+    category: str | None,
+    comment: str | None,
+) -> UUID:
+    ordered_ids = sorted(set(suggestion_ids), key=str)
+    fingerprint = sha256(json.dumps({
+        "ids": [str(value) for value in ordered_ids], "decision": decision,
+        "category": category, "comment": comment,
+    }, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+    with _connect(database_url) as connection, connection.cursor() as cursor:
+        cursor.execute(
+            """SELECT cs.*,pr.id AS project_revision_id
+               FROM intake.classification_suggestions cs
+               JOIN catalog.project_revisions pr ON pr.id=cs.revision_id
+               WHERE pr.project_id=%s AND cs.id=ANY(%s) AND cs.target_kind='cad_layer'
+               FOR UPDATE""",
+            (project_id, ordered_ids),
+        )
+        rows = cursor.fetchall()
+        if len(rows) != len(ordered_ids):
+            raise KeyError("one or more classification suggestions do not exist")
+        revision_ids = {row["revision_id"] for row in rows}
+        if len(revision_ids) != 1:
+            raise IntakeConflict("batch review must belong to one project revision")
+        revision_id = next(iter(revision_ids))
+        cursor.execute(
+            """INSERT INTO intake.classification_review_batches(
+                   project_id,revision_id,decision,category,suggestion_ids,taxonomy_version,comment,fingerprint)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+               ON CONFLICT (revision_id,fingerprint) DO UPDATE SET fingerprint=EXCLUDED.fingerprint
+               RETURNING id,(xmax=0) AS inserted""",
+            (
+                project_id, revision_id,
+                "correct" if decision == "accept" and category else "accept" if decision == "accept" else "reject",
+                category, ordered_ids, rows[0].get("taxonomy_version"), comment, fingerprint,
+            ),
+        )
+        batch = cursor.fetchone()
+        batch_id = batch["id"]
+        if not batch["inserted"]:
+            return batch_id
+        for row in rows:
+            reviewed_category = category or row["suggested_category"]
+            status = "accepted" if decision == "accept" else "rejected"
+            axis_values = dict(row.get("axis_results") or {})
+            if category:
+                axes = dict(axis_values.get("axes") or {})
+                axes["object_class"] = {"label": category, "confidence": 1.0, "cues": ["batch engineer review"]}
+                axis_values["axes"] = axes
+            cursor.execute(
+                """INSERT INTO intake.classification_reviews(
+                       suggestion_id,project_id,decision,axis_values,scope,comment,batch_id)
+                   VALUES (%s,%s,%s,%s,'project',%s,%s)""",
+                (
+                    row["id"], project_id,
+                    "correct" if decision == "accept" and category else "accept" if decision == "accept" else "reject",
+                    Jsonb(axis_values), comment, batch_id,
+                ),
+            )
+            cursor.execute(
+                """UPDATE intake.classification_suggestions
+                   SET review_status=%s,reviewed_category=%s,review_comment=%s,reviewed_at=now()
+                   WHERE id=%s""",
+                (status, reviewed_category if status == "accepted" else None, comment, row["id"]),
+            )
+            if row["cad_layer_id"]:
+                if status == "accepted":
+                    cursor.execute("SELECT id FROM geo.object_classes WHERE code=%s", (reviewed_category,))
+                    object_class = cursor.fetchone()
+                    cursor.execute(
+                        """UPDATE intake.cad_layers SET mapping_status='confirmed',candidate_class_id=%s,
+                               properties=properties || %s WHERE id=%s""",
+                        (object_class["id"] if object_class else None,
+                         Jsonb({"reviewed_class_code": reviewed_category}), row["cad_layer_id"]),
+                    )
+                else:
+                    cursor.execute("UPDATE intake.cad_layers SET mapping_status='rejected' WHERE id=%s", (row["cad_layer_id"],))
+        cursor.execute(
+            """INSERT INTO audit.events(action,entity_schema,entity_table,entity_id,metadata)
+               VALUES ('batch_review','intake','classification_review_batches',%s,%s)""",
+            (batch_id, Jsonb({"count": len(rows), "decision": decision, "category": category, "fingerprint": fingerprint})),
+        )
+        return batch_id
+
+
+def resolve_finding(
+    database_url: str, project_id: UUID, finding_id: UUID, action: str, reason: str,
+) -> dict:
+    with _connect(database_url) as connection, connection.cursor() as cursor:
+        cursor.execute(
+            """SELECT ff.* FROM intake.fidelity_findings ff
+               JOIN catalog.project_revisions pr ON pr.id=ff.revision_id
+               WHERE pr.project_id=%s AND ff.id=%s FOR UPDATE""",
+            (project_id, finding_id),
+        )
+        finding = cursor.fetchone()
+        if finding is None:
+            raise KeyError(finding_id)
+        status = {"waive": "accepted", "reopen": "open", "block": "rejected"}[action]
+        impact = {
+            "edge_resolved": False,
+            "publication_blocked": action == "block" or (finding["severity"] == "critical" and action != "waive"),
+            "revision_scoped": True,
+        }
+        cursor.execute("UPDATE intake.fidelity_findings SET status=%s WHERE id=%s", (status, finding_id))
+        cursor.execute(
+            """INSERT INTO intake.finding_resolutions(finding_id,project_id,action,reason,impact)
+               VALUES (%s,%s,%s,%s,%s) RETURNING id,created_at""",
+            (finding_id, project_id, action, reason, Jsonb(impact)),
+        )
+        resolution = cursor.fetchone()
+        cursor.execute(
+            """INSERT INTO audit.events(action,entity_schema,entity_table,entity_id,metadata)
+               VALUES ('finding_resolution','intake','fidelity_findings',%s,%s)""",
+            (finding_id, Jsonb({"action": action, "reason": reason, "impact": impact})),
+        )
+        return {"id": str(resolution["id"]), "status": status, "action": action, "impact": impact}
+
+
 def publish_revision(database_url: str, intake_root: Path, project_id: UUID) -> UUID:
     with _connect(database_url) as connection, connection.cursor() as cursor:
         cursor.execute(

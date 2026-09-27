@@ -179,9 +179,15 @@ class PostgisRepository:
             )
             stages = [IntakeStage(**item) for item in cursor.fetchall()]
             cursor.execute(
-                """SELECT id,source_asset_id,code,severity,stage,title,detail,evidence,status
-                   FROM intake.fidelity_findings WHERE revision_id=%s ORDER BY
-                     CASE severity WHEN 'critical' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END,created_at""",
+                """SELECT ff.id,ff.source_asset_id,ff.code,ff.severity,ff.stage,ff.title,ff.detail,
+                          ff.evidence,ff.status,COALESCE((
+                            SELECT jsonb_build_object('action',fr.action,'reason',fr.reason,
+                              'impact',fr.impact,'created_at',fr.created_at)
+                            FROM intake.finding_resolutions fr WHERE fr.finding_id=ff.id
+                            ORDER BY fr.created_at DESC LIMIT 1
+                          ),'{}'::jsonb) AS resolution
+                   FROM intake.fidelity_findings ff WHERE ff.revision_id=%s ORDER BY
+                     CASE ff.severity WHEN 'critical' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END,ff.created_at""",
                 (summary.revision_id,),
             )
             findings = [FidelityFinding(**item) for item in cursor.fetchall()]

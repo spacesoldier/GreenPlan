@@ -1,6 +1,6 @@
 # ADR-0028 — CAD workbench: графовая навигация, массовый review и нижний журнал
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-09-28
 - Owners: frontend, CAD ingestion, domain model
 - Related phase: Phase 3, iteration 3

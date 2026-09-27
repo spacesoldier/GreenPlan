@@ -46,6 +46,12 @@ def test_openapi_exposes_project_soft_delete(client):
     assert "delete" in response.json()["paths"]["/v1/intake/projects/{project_id}"]
 
 
+def test_openapi_exposes_cad_workbench_review_operations(client):
+    paths = client.get("/openapi.json").json()["paths"]
+    assert "post" in paths["/v1/intake/projects/{project_id}/classifications/batch-review"]
+    assert "post" in paths["/v1/intake/projects/{project_id}/findings/{finding_id}/resolve"]
+
+
 def test_invalid_uuid_uses_stable_error_envelope(client):
     response = client.get("/v1/projects/not-a-uuid")
 

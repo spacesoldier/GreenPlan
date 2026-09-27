@@ -52,7 +52,7 @@ ADR фиксируют архитектурное решение, его кон�
 | [0025](0025-folder-ingest-and-visible-xref-dependency-tree.md) | Accepted | Настоящая загрузка каталога и диагностическое дерево XREF текущей поставки |
 | [0026](0026-intake-activity-stream-and-supported-file-boundary.md) | Accepted | Живой журнал обработки и allowlist CAD/табличных файлов intake |
 | [0027](0027-context-first-cad-layer-inspection.md) | Accepted | Контекстный инспектор слоёв и review-корпус до fine-tuning |
-| [0028](0028-cad-workbench-graph-navigation-bulk-review-and-activity-dock.md) | Proposed | CAD workbench, graph/tree navigation, batch review, typed issues и нижний activity dock |
+| [0028](0028-cad-workbench-graph-navigation-bulk-review-and-activity-dock.md) | Accepted | CAD workbench, graph/tree navigation, batch review, typed issues и нижний activity dock |
 
 ## Именование
 

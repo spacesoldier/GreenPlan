@@ -1,6 +1,6 @@
 # Phase 3, iteration 3 — CAD workbench and review operations
 
-- Status: Planned
+- Status: In progress — workbench vertical slice implemented 2026-09-28
 - Date: 2026-09-28
 - Owners: frontend, backend, CAD ingestion, data platform
 
@@ -172,3 +172,28 @@
 API/SQL evidence для двух пилотов, regression test intake pipeline и отчёт по масштабу всех 20
 проектов: documents, XREF edges/cycles/missing, layouts/viewports, layer families, bulk decisions,
 waivers и unresolved fidelity issues.
+
+## Implementation checkpoint — 2026-09-28
+
+Первый исполнимый vertical slice собран и развёрнут поверх существующего intake pipeline:
+
+- длинная intake-страница преобразована в workbench с views `Материалы`, `CAD Explorer`,
+  `Проблемы`, `Публикация`;
+- physical delivery отображается отдельным деревом без изменения исходных relative paths;
+- CAD Explorer показывает документы, пространства, слои и XREF aliases; найденный alias переводит
+  к каноническому документу, отсутствующая ссылка остаётся диагностическим leaf;
+- слои объединяются только по exact normalized name и entity-type signature, доступны family
+  multi-select и одна audited batch-review операция;
+- findings отображаются как очередь с evidence и действиями `retry`, `block`, `waive`, `reopen`;
+  waiver хранит причину и явно не выдаёт XREF edge за разрешённый;
+- source/DXF inventory показаны рядом, а технические детали conversion доступны из события;
+- activity stream перенесён в scrollable fixed bottom dock с persisted details, metrics и выводом;
+- миграция `013_cad_workbench_review.sql` добавила batch identity и сохранение finding resolutions.
+
+Проверено: frontend typecheck, 43 frontend tests, 28 targeted backend tests, Python compileall,
+production Docker build и headless smoke screenshot рабочего проекта «Старый Гай».
+
+Итерация остаётся `In progress`. До `Verification` ещё нужны нормализованные XREF placements и
+viewport states, lazy/virtualized explorer API, URL deep links, ручное сопоставление XREF,
+идемпотентность batch review, bounded log endpoint, полный T3W.7 на двух пилотах и статистический
+прогон двадцати проектов.
