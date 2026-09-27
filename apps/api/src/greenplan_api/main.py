@@ -20,6 +20,7 @@ from .models import (
     IntakeProjectList,
     IntakeReviewRequest,
     ClassificationReviewRequest,
+    AssistantRunView,
     IntakeUploadResult,
     ModelList,
     ObjectDetail,
@@ -42,6 +43,7 @@ from .intake_service import (
     review_classification,
     store_stream,
 )
+from .assistant import create_or_resume_run, execute_run, reconcile_project_runs
 
 
 class ApiError(Exception):
@@ -172,6 +174,7 @@ def create_app(repository: Repository | None = None) -> FastAPI:
     def get_intake_project(project_id: UUID, repo: Repo):
         database_url, _workspace_code, root = intake_settings(repo)
         refresh_workflow(database_url, root, project_id)
+        reconcile_project_runs(database_url, project_id)
         project = repo.get_intake_project(project_id)
         if project is None:
             raise ApiError(404, "project_not_found", "intake project does not exist")
@@ -228,6 +231,45 @@ def create_app(repository: Repository | None = None) -> FastAPI:
             revision_id=project.revision_id, state="analyzing",
             fidelity_verdict=project.fidelity_verdict, message="analysis queued",
         )
+
+    @app.post(
+        "/v1/intake/projects/{project_id}/assistant-runs",
+        response_model=AssistantRunView,
+        status_code=202,
+        tags=["intake"],
+    )
+    def start_intake_assistant(project_id: UUID, background: BackgroundTasks, repo: Repo):
+        database_url, _workspace_code, root = intake_settings(repo)
+        project = repo.get_intake_project(project_id)
+        if project is None:
+            raise ApiError(404, "project_not_found", "intake project does not exist")
+        try:
+            run_id, created = create_or_resume_run(database_url, project_id)
+        except ValueError as exc:
+            raise ApiError(409, "empty_delivery", str(exc)) from exc
+        run = repo.get_assistant_run(run_id)
+        if run is None:
+            raise ApiError(500, "assistant_run_missing", "assistant run was not persisted")
+        if created or run.state in {"queued", "running", "failed"}:
+            background.add_task(
+                execute_run, database_url, root, project_id, run_id, os.getenv("CELERY_BROKER_URL"),
+            )
+        return run
+
+    @app.get(
+        "/v1/intake/projects/{project_id}/assistant-runs/{run_id}",
+        response_model=AssistantRunView,
+        tags=["intake"],
+    )
+    def get_intake_assistant_run(project_id: UUID, run_id: UUID, repo: Repo):
+        database_url, _workspace_code, root = intake_settings(repo)
+        refresh_workflow(database_url, root, project_id)
+        reconcile_project_runs(database_url, project_id)
+        project = repo.get_intake_project(project_id)
+        run = repo.get_assistant_run(run_id)
+        if project is None or run is None or run.revision_id != project.revision_id:
+            raise ApiError(404, "assistant_run_not_found", "assistant run does not exist")
+        return run
 
     @app.post("/v1/intake/projects/{project_id}/review", response_model=IntakeActionResult, tags=["intake"])
     def review_intake_project(project_id: UUID, payload: IntakeReviewRequest, repo: Repo):

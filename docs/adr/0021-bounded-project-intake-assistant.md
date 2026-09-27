@@ -1,6 +1,6 @@
 # ADR-0021 — Ограниченный ассистент разбора проектной поставки
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-09-27
 - Owners: backend, CAD ingestion, ML, frontend
 - Related phase: Phase 3, iteration 2
@@ -162,4 +162,3 @@ model version. Принятие master, ambiguous XREF и semantic mapping ос�
 - [ADR-0019](0019-resolved-xref-assembly.md)
 - [ADR-0020](0020-human-reviewed-cad-classification.md)
 - [Phase 3 iteration 2](../dev-plan/phase-03-iteration-02-intake-assistant.md)
-

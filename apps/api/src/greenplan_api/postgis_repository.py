@@ -19,6 +19,8 @@ from .models import (
     MasterCandidate,
     CadInventory,
     ClassificationSuggestionView,
+    AssistantRunView,
+    AssistantTaskView,
     ModelSummary,
     ObjectDetail,
     ProjectDetail,
@@ -203,7 +205,8 @@ class PostgisRepository:
                 """SELECT cs.id,cs.target_kind,cs.target_key,cs.source_asset_id,
                           COALESCE(cl.name,de.relative_path,cs.target_key) AS target_label,
                           cs.suggested_category,cs.confidence::float8 AS confidence,
-                          cs.method,cs.cues,cs.alternatives,cs.review_status
+                          cs.method,cs.cues,cs.alternatives,cs.review_status,
+                          cs.taxonomy_version,cs.axis_results
                    FROM intake.classification_suggestions cs
                    LEFT JOIN intake.cad_layers cl ON cl.id=cs.cad_layer_id
                    LEFT JOIN intake.delivery_entries de ON de.delivery_id=%s
@@ -214,11 +217,48 @@ class PostgisRepository:
                 (summary.delivery_id, summary.revision_id),
             )
             suggestions = [ClassificationSuggestionView(**item) for item in cursor.fetchall()]
+            cursor.execute(
+                """SELECT id,revision_id,input_fingerprint,schema_version,taxonomy_version,
+                          provider_version,state,progress::float8 AS progress,summary,error_summary,
+                          started_at,heartbeat_at,finished_at,created_at
+                   FROM intake.assistant_runs WHERE revision_id=%s
+                   ORDER BY created_at DESC LIMIT 10""",
+                (summary.revision_id,),
+            )
+            runs = []
+            for run_row in cursor.fetchall():
+                cursor.execute(
+                    """SELECT id,task_key,title,position,state,dependencies,attempts,
+                              progress::float8 AS progress,error_summary,started_at,heartbeat_at,finished_at
+                       FROM intake.assistant_tasks WHERE run_id=%s ORDER BY position""",
+                    (run_row["id"],),
+                )
+                runs.append(AssistantRunView(**run_row, tasks=[AssistantTaskView(**task) for task in cursor.fetchall()]))
             return IntakeProjectDetail(
                 **summary.model_dump(), description=description, files=files, stages=stages,
                 findings=findings, master_candidates=candidates, inventories=inventories,
-                classification_suggestions=suggestions,
+                classification_suggestions=suggestions, assistant_runs=runs,
             )
+
+    def get_assistant_run(self, run_id: UUID) -> AssistantRunView | None:
+        with self._connect() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                """SELECT id,revision_id,input_fingerprint,schema_version,taxonomy_version,
+                          provider_version,state,progress::float8 AS progress,summary,error_summary,
+                          started_at,heartbeat_at,finished_at,created_at
+                   FROM intake.assistant_runs WHERE id=%s""",
+                (run_id,),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                return None
+            cursor.execute(
+                """SELECT id,task_key,title,position,state,dependencies,attempts,
+                          progress::float8 AS progress,error_summary,started_at,heartbeat_at,finished_at
+                   FROM intake.assistant_tasks WHERE run_id=%s ORDER BY position""",
+                (run_id,),
+            )
+            return AssistantRunView(**row, tasks=[AssistantTaskView(**task) for task in cursor.fetchall()])
 
     def get_project(self, project_id: UUID) -> ProjectDetail | None:
         with self._connect() as connection, connection.cursor() as cursor:

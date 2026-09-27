@@ -1,6 +1,6 @@
 # ADR-0023 — Provider-neutral typed decisions: Jev и Laya
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-09-27
 - Owners: ML, backend, security, domain modelling
 - Related phase: Phase 3, iteration 2
@@ -174,4 +174,3 @@ provider лучше соответствует конечному answer space �
 - [ADR-0021](0021-bounded-project-intake-assistant.md)
 - [ADR-0022](0022-versioned-cad-semantic-taxonomy-and-learning-loop.md)
 - [Phase 3 iteration 2](../dev-plan/phase-03-iteration-02-intake-assistant.md)
-

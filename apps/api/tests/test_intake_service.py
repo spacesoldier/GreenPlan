@@ -12,6 +12,11 @@ from greenplan_api.intake_service import (
     safe_archive_member,
 )
 from greenplan_api.classification import classify_delivery_path, needs_model_assist
+from greenplan_api.decision_models import (
+    DecisionProviderError,
+    TypedChoiceQuestion,
+    validate_typed_answers,
+)
 from greenplan_api.cad_assembly import assemble_xrefs, delivery_xref_resolver, xref_insertions
 
 
@@ -100,6 +105,33 @@ def test_unclear_delivery_entry_is_sent_to_model_assist():
     suggestion = classify_delivery_path("misc/AB-42.bin")
     assert suggestion.category == "unknown"
     assert needs_model_assist(suggestion)
+
+
+def test_typed_provider_rejects_unknown_labels_and_question_ids():
+    questions = {
+        "domain": TypedChoiceQuestion(
+            instructions="Classify domain",
+            choices={"vegetation": "Plants", "unknown": "Insufficient evidence"},
+        )
+    }
+    valid = validate_typed_answers(
+        {"answers": {"domain": {"choice": "vegetation", "confidence": 0.8,
+                                 "probabilities": {"vegetation": 0.8, "unknown": 0.2}}}},
+        questions,
+    )
+    assert valid["domain"].choice == "vegetation"
+
+    with pytest.raises(DecisionProviderError):
+        validate_typed_answers(
+            {"answers": {"domain": {"choice": "transport", "confidence": 0.9,
+                                     "probabilities": {"transport": 0.9}}}},
+            questions,
+        )
+    with pytest.raises(DecisionProviderError):
+        validate_typed_answers(
+            {"answers": {"unexpected": {"choice": "vegetation", "confidence": 1.0}}},
+            questions,
+        )
 
 
 def test_xref_assembly_embeds_child_and_preserves_insert_transform(tmp_path):

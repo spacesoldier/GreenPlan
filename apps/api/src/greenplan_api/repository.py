@@ -3,6 +3,7 @@ from typing import Protocol
 from uuid import UUID
 
 from .models import (
+    AssistantRunView,
     Evidence,
     Feature,
     ModelSummary,
@@ -11,6 +12,8 @@ from .models import (
     ProjectSummary,
     SceneManifest,
     SourceTree,
+    IntakeProjectDetail,
+    IntakeProjectSummary,
 )
 
 BBox = tuple[float, float, float, float]
@@ -49,6 +52,12 @@ class Repository(Protocol):
     def get_evidence(self, object_id: UUID) -> list[Evidence] | None: ...
 
     def get_source_tree(self, revision_id: UUID) -> SourceTree | None: ...
+
+    def list_intake_projects(self) -> list[IntakeProjectSummary]: ...
+
+    def get_intake_project(self, project_id: UUID) -> IntakeProjectDetail | None: ...
+
+    def get_assistant_run(self, run_id: UUID) -> AssistantRunView | None: ...
 
 
 def intersects(left: BBox, right: BBox) -> bool:

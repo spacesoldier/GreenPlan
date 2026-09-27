@@ -1,6 +1,6 @@
 # ADR-0022 — Версионируемая CAD-таксономия и обучение на инженерной проверке
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-09-27
 - Owners: domain modelling, CAD ingestion, ML, landscape architecture
 - Related phase: Phase 3, iteration 2
@@ -152,4 +152,3 @@ Review event неизменяем и отделён от текущего effect
 - [ADR-0021](0021-bounded-project-intake-assistant.md)
 - [Domain data model](../10-domain-data-model.md)
 - [Phase 3 iteration 2](../dev-plan/phase-03-iteration-02-intake-assistant.md)
-

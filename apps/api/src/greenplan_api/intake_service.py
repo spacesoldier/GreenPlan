@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import Counter
 from hashlib import sha256
+import json
 import os
 from pathlib import Path, PurePosixPath
 import re
@@ -21,6 +22,7 @@ from .classification import classify_delivery_path, needs_model_assist
 from .cad_assembly import assemble_xrefs, delivery_xref_resolver, xref_insertions
 from .decision_models import DecisionProviderError, laya_delivery_role
 from .import_pilots import PilotSpec, ingest_geometry
+from .semantic_taxonomy import classify_layer_axes, feature_snapshot
 
 
 DWG_SIGNATURE = re.compile(rb"^AC\d{4}$")
@@ -367,6 +369,10 @@ def dxf_inventory(path: Path) -> dict:
     document = ezdxf.readfile(path)
     model_counts: Counter[str] = Counter(entity.dxftype() for entity in document.modelspace())
     layer_counts: Counter[str] = Counter(str(entity.dxf.get("layer", "0")) for entity in document.modelspace())
+    layer_entity_types: dict[str, Counter[str]] = {}
+    for entity in document.modelspace():
+        layer_name = str(entity.dxf.get("layer", "0"))
+        layer_entity_types.setdefault(layer_name, Counter())[entity.dxftype()] += 1
     spaces = [{"name": "Model", "kind": "model", "entity_count": len(document.modelspace())}]
     for layout in document.layouts:
         if layout.name.casefold() == "model":
@@ -398,6 +404,7 @@ def dxf_inventory(path: Path) -> dict:
         "entity_types": dict(model_counts),
         "layer_count": len(document.layers),
         "layer_entity_counts": dict(layer_counts),
+        "layer_entity_types": {key: dict(value) for key, value in layer_entity_types.items()},
         "block_count": len(document.blocks),
         "layout_count": len(spaces) - 1,
         "spaces": spaces,
@@ -508,33 +515,74 @@ def _record_dxf_inventory(cursor, revision_id: UUID, asset: dict, root: Path, st
                 Jsonb({"overlay": xref_item.get("overlay", False), "placements": xref_item.get("placements", []), "matches": xref_item.get("matches", [])}),
             ),
         )
-    cursor.execute("DELETE FROM intake.cad_layers WHERE cad_document_id=%s", (cad_document_id,))
     for layer_name, entity_count in metrics.get("layer_entity_counts", {}).items():
         classification = classify_layer(layer_name)
+        entity_types = metrics.get("layer_entity_types", {}).get(layer_name, {})
+        delivery_role = classify_delivery_path(
+            str(asset.get("properties", {}).get("relative_path") or ""), "dxf",
+        ).category
+        document_role = {
+            "project_solution": "general_plan",
+            "source_data": "source_base",
+            "survey_existing": "survey",
+            "xref_dependency": "xref",
+        }.get(delivery_role, "unknown")
+        axes = classify_layer_axes(
+            layer_name, entity_types=entity_types, document_role=document_role,
+        )
+        snapshot = feature_snapshot(
+            layer_name=layer_name,
+            entity_types=entity_types,
+            entity_count=entity_count,
+            document_role=document_role,
+            relative_path=str(asset.get("properties", {}).get("relative_path") or ""),
+        )
+        snapshot_fingerprint = sha256(
+            json.dumps(snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(),
+        ).hexdigest()
+        target_key = f"{asset['id']}:{layer_name}"
+        cursor.execute(
+            """INSERT INTO intake.feature_snapshots(
+                   revision_id,source_asset_id,target_kind,target_key,schema_version,fingerprint,features)
+               VALUES (%s,%s,'cad_layer',%s,%s,%s,%s)
+               ON CONFLICT (revision_id,target_kind,target_key,schema_version,fingerprint)
+               DO UPDATE SET features=EXCLUDED.features RETURNING id""",
+            (revision_id, asset["id"], target_key, snapshot["schema_version"], snapshot_fingerprint, Jsonb(snapshot)),
+        )
+        feature_snapshot_id = cursor.fetchone()["id"]
         cursor.execute(
             """INSERT INTO intake.cad_layers(
                    cad_document_id,name,entity_count,mapping_status,confidence,properties)
-               VALUES (%s,%s,%s,'candidate',%s,%s) RETURNING id""",
+               VALUES (%s,%s,%s,'candidate',%s,%s)
+               ON CONFLICT (cad_document_id,name) DO UPDATE SET
+                 entity_count=EXCLUDED.entity_count,confidence=EXCLUDED.confidence,
+                 properties=EXCLUDED.properties
+               RETURNING id""",
             (
                 cad_document_id, layer_name, entity_count, classification.confidence,
-                Jsonb({"suggested_class_code": classification.class_code, "reason": classification.reason}),
+                Jsonb({"suggested_class_code": classification.class_code, "reason": classification.reason,
+                       "taxonomy": axes.as_dict()}),
             ),
         )
         layer_id = cursor.fetchone()["id"]
         cursor.execute(
             """INSERT INTO intake.classification_suggestions(
                    revision_id,target_kind,target_key,source_asset_id,cad_layer_id,suggested_category,
-                   confidence,method,input_snapshot,cues,alternatives)
-               VALUES (%s,'cad_layer',%s,%s,%s,%s,%s,'layer-name-rules-v1',%s,%s,'[]'::jsonb)
+                   confidence,method,input_snapshot,cues,alternatives,taxonomy_version,axis_results,
+                   feature_snapshot_id,provider_run)
+               VALUES (%s,'cad_layer',%s,%s,%s,%s,%s,'multi-axis-rules-v2',%s,%s,'[]'::jsonb,
+                       %s,%s,%s,%s)
                ON CONFLICT (revision_id,target_kind,target_key,method) DO UPDATE SET
                  cad_layer_id=EXCLUDED.cad_layer_id,suggested_category=EXCLUDED.suggested_category,
                  confidence=EXCLUDED.confidence,input_snapshot=EXCLUDED.input_snapshot,cues=EXCLUDED.cues,
-                 review_status='pending',reviewed_category=NULL,reviewed_at=NULL""",
+                 taxonomy_version=EXCLUDED.taxonomy_version,axis_results=EXCLUDED.axis_results,
+                 feature_snapshot_id=EXCLUDED.feature_snapshot_id,provider_run=EXCLUDED.provider_run""",
             (
-                revision_id, f"{asset['id']}:{layer_name}", asset["id"], layer_id,
-                classification.class_code, classification.confidence,
-                Jsonb({"layer_name": layer_name, "entity_count": entity_count, "stage": stage}),
-                Jsonb([classification.reason]),
+                revision_id, target_key, asset["id"], layer_id,
+                axes.object_class.label, axes.object_class.confidence,
+                Jsonb(snapshot), Jsonb([classification.reason]), axes.taxonomy_version,
+                Jsonb(axes.as_dict()), feature_snapshot_id,
+                Jsonb({"provider": "deterministic_rules", "version": "rules-v2"}),
             ),
         )
     cursor.execute("DELETE FROM intake.cad_spaces WHERE inventory_id=%s", (inventory_id,))
@@ -630,7 +678,12 @@ def analyze_revision(database_url: str, intake_root: Path, project_id: UUID, bro
         cursor.execute("UPDATE intake.deliveries SET status='inventoried' WHERE id=%s", (workflow["delivery_id"],))
         cursor.execute("DELETE FROM intake.fidelity_findings WHERE revision_id=%s", (revision_id,))
         cursor.execute("DELETE FROM intake.master_candidates WHERE revision_id=%s", (revision_id,))
-        cursor.execute("DELETE FROM intake.classification_suggestions WHERE revision_id=%s", (revision_id,))
+        cursor.execute(
+            """UPDATE intake.classification_suggestions SET review_status='superseded'
+               WHERE revision_id=%s AND target_kind='cad_layer'
+                 AND method<>'multi-axis-rules-v2' AND review_status='pending'""",
+            (revision_id,),
+        )
         _expand_nested_zip_archives(cursor, revision_id, workflow["delivery_id"], intake_root)
         cursor.execute(
             """SELECT sa.id,sa.storage_locator,sa.sha256,sa.size_bytes,sa.properties,de.relative_path
@@ -664,7 +717,11 @@ def analyze_revision(database_url: str, intake_root: Path, project_id: UUID, bro
                 """INSERT INTO intake.classification_suggestions(
                        revision_id,target_kind,target_key,source_asset_id,suggested_category,
                        confidence,method,input_snapshot,cues,alternatives)
-                   VALUES (%s,'file',%s,%s,%s,%s,%s,%s,%s,%s)""",
+                   VALUES (%s,'file',%s,%s,%s,%s,%s,%s,%s,%s)
+                   ON CONFLICT (revision_id,target_kind,target_key,method) DO UPDATE SET
+                     suggested_category=EXCLUDED.suggested_category,
+                     confidence=EXCLUDED.confidence,input_snapshot=EXCLUDED.input_snapshot,
+                     cues=EXCLUDED.cues,alternatives=EXCLUDED.alternatives""",
                 (
                     revision_id, str(asset["id"]), asset["id"], suggestion.category,
                     suggestion.confidence, suggestion.method,
@@ -897,6 +954,25 @@ def review_classification(
             raise KeyError(suggestion_id)
         reviewed_category = category or row["suggested_category"]
         status = "accepted" if decision == "accept" else "rejected"
+        axis_values = dict(row.get("axis_results") or {})
+        if category:
+            axes = dict(axis_values.get("axes") or {})
+            axes["object_class"] = {
+                "label": category,
+                "confidence": 1.0,
+                "cues": ["engineer review"],
+            }
+            axis_values["axes"] = axes
+        cursor.execute(
+            """INSERT INTO intake.classification_reviews(
+                   suggestion_id,project_id,decision,axis_values,scope,comment)
+               VALUES (%s,%s,%s,%s,'project',%s)""",
+            (
+                suggestion_id, project_id,
+                "accept" if decision == "accept" and not category else "correct" if decision == "accept" else "reject",
+                Jsonb(axis_values), comment,
+            ),
+        )
         cursor.execute(
             """UPDATE intake.classification_suggestions
                SET review_status=%s,reviewed_category=%s,review_comment=%s,reviewed_at=now()

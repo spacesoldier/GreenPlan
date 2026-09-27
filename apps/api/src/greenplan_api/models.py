@@ -263,6 +263,41 @@ class ClassificationSuggestionView(ApiModel):
     cues: list[str] = Field(default_factory=list)
     alternatives: list[dict[str, Any]] = Field(default_factory=list)
     review_status: str
+    taxonomy_version: str | None = None
+    axis_results: dict[str, Any] = Field(default_factory=dict)
+
+
+class AssistantTaskView(ApiModel):
+    id: UUID
+    task_key: str
+    title: str
+    position: int
+    state: str
+    dependencies: list[str] = Field(default_factory=list)
+    attempts: int
+    progress: float
+    error_summary: str | None = None
+    started_at: datetime | None = None
+    heartbeat_at: datetime | None = None
+    finished_at: datetime | None = None
+
+
+class AssistantRunView(ApiModel):
+    id: UUID
+    revision_id: UUID
+    input_fingerprint: str
+    schema_version: str
+    taxonomy_version: str
+    provider_version: str
+    state: str
+    progress: float
+    summary: dict[str, Any] = Field(default_factory=dict)
+    error_summary: str | None = None
+    started_at: datetime | None = None
+    heartbeat_at: datetime | None = None
+    finished_at: datetime | None = None
+    created_at: datetime
+    tasks: list[AssistantTaskView] = Field(default_factory=list)
 
 
 class ClassificationReviewRequest(ApiModel):
@@ -279,6 +314,7 @@ class IntakeProjectDetail(IntakeProjectSummary):
     master_candidates: list[MasterCandidate] = Field(default_factory=list)
     inventories: list[CadInventory] = Field(default_factory=list)
     classification_suggestions: list[ClassificationSuggestionView] = Field(default_factory=list)
+    assistant_runs: list[AssistantRunView] = Field(default_factory=list)
 
 
 class IntakeUploadResult(ApiModel):

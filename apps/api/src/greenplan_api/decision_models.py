@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
+from typing import Mapping
 from urllib.request import Request, urlopen
 
 from .classification import ClassificationSuggestion
@@ -23,22 +25,60 @@ class DecisionProviderError(RuntimeError):
     pass
 
 
-def laya_delivery_role(
+@dataclass(frozen=True)
+class TypedChoiceQuestion:
+    instructions: str
+    choices: Mapping[str, str]
+
+
+@dataclass(frozen=True)
+class TypedChoiceAnswer:
+    choice: str
+    confidence: float
+    probabilities: dict[str, float]
+
+
+def validate_typed_answers(
+    result: object,
+    questions: Mapping[str, TypedChoiceQuestion],
+) -> dict[str, TypedChoiceAnswer]:
+    """Validate a provider response before it can become an advisory suggestion."""
+    try:
+        payload = result if isinstance(result, dict) else {}
+        raw_answers = payload["answers"]
+        if not isinstance(raw_answers, dict) or set(raw_answers) != set(questions):
+            raise ValueError("answer question ids do not match request")
+        answers: dict[str, TypedChoiceAnswer] = {}
+        for question_id, question in questions.items():
+            raw = raw_answers[question_id]
+            choice = str(raw["choice"])
+            if choice not in question.choices:
+                raise ValueError(f"unknown choice {choice!r} for {question_id!r}")
+            probabilities = {str(key): float(value) for key, value in (raw.get("probabilities") or raw.get("probs") or {}).items()}
+            if any(key not in question.choices for key in probabilities):
+                raise ValueError(f"unknown probability label for {question_id!r}")
+            confidence = float(raw.get("confidence", probabilities.get(choice, 0.0)))
+            if not 0 <= confidence <= 1 or any(not 0 <= value <= 1 for value in probabilities.values()):
+                raise ValueError("confidence and probabilities must be between 0 and 1")
+            answers[question_id] = TypedChoiceAnswer(choice, confidence, probabilities)
+        return answers
+    except (KeyError, TypeError, ValueError) as exc:
+        raise DecisionProviderError(f"invalid typed decision response: {exc}") from exc
+
+
+def typed_decide(
     base_url: str,
     *,
-    relative_path: str,
-    detected_format: str,
+    state: Mapping[str, object],
+    questions: Mapping[str, TypedChoiceQuestion],
     timeout: float = 8.0,
     api_key: str | None = None,
-) -> ClassificationSuggestion:
+) -> dict[str, TypedChoiceAnswer]:
     payload = {
-        "state": {"relative_path": relative_path, "detected_format": detected_format},
+        "state": dict(state),
         "questions": {
-            "delivery_role": {
-                "type": "choice",
-                "instructions": "Определи роль файла в архитектурно-ландшафтном CAD-проекте.",
-                "criteria": DELIVERY_ROLE_CRITERIA,
-            }
+            key: {"type": "choice", "instructions": value.instructions, "criteria": dict(value.choices)}
+            for key, value in questions.items()
         },
     }
     headers = {"Content-Type": "application/json"}
@@ -52,15 +92,35 @@ def laya_delivery_role(
     )
     try:
         with urlopen(request, timeout=timeout) as response:
-            result = json.load(response)
-        answer = result["answers"]["delivery_role"]
-        category = str(answer["choice"])
-        if category not in DELIVERY_ROLE_CRITERIA:
-            raise KeyError(category)
-        probabilities = answer.get("probabilities") or answer.get("probs") or {}
-        confidence = float(answer.get("confidence", probabilities.get(category, 0.0)))
+            return validate_typed_answers(json.load(response), questions)
+    except DecisionProviderError:
+        raise
     except Exception as exc:
-        raise DecisionProviderError(f"Laya decision failed: {exc}") from exc
+        raise DecisionProviderError(f"typed decision failed: {exc}") from exc
+
+
+def laya_delivery_role(
+    base_url: str,
+    *,
+    relative_path: str,
+    detected_format: str,
+    timeout: float = 8.0,
+    api_key: str | None = None,
+) -> ClassificationSuggestion:
+    answers = typed_decide(
+        base_url,
+        state={"relative_path": relative_path, "detected_format": detected_format},
+        questions={"delivery_role": TypedChoiceQuestion(
+            instructions="Определи роль файла в архитектурно-ландшафтном CAD-проекте.",
+            choices=DELIVERY_ROLE_CRITERIA,
+        )},
+        timeout=timeout,
+        api_key=api_key,
+    )
+    answer = answers["delivery_role"]
+    category = answer.choice
+    probabilities = answer.probabilities
+    confidence = answer.confidence
     alternatives = sorted(
         ((str(key), float(value)) for key, value in probabilities.items() if key != category),
         key=lambda item: -item[1],

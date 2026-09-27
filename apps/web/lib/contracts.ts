@@ -201,6 +201,45 @@ export type ClassificationSuggestion = {
   cues: string[];
   alternatives: Array<{ category: string; confidence: number }>;
   review_status: string;
+  taxonomy_version: string | null;
+  axis_results: {
+    taxonomy_version?: string;
+    review_required?: boolean;
+    axes?: Record<string, { label: string; confidence: number; cues: string[] }>;
+  };
+};
+
+export type AssistantTask = {
+  id: string;
+  task_key: string;
+  title: string;
+  position: number;
+  state: string;
+  dependencies: string[];
+  attempts: number;
+  progress: number;
+  error_summary: string | null;
+  started_at: string | null;
+  heartbeat_at: string | null;
+  finished_at: string | null;
+};
+
+export type AssistantRun = {
+  id: string;
+  revision_id: string;
+  input_fingerprint: string;
+  schema_version: string;
+  taxonomy_version: string;
+  provider_version: string;
+  state: string;
+  progress: number;
+  summary: Record<string, unknown>;
+  error_summary: string | null;
+  started_at: string | null;
+  heartbeat_at: string | null;
+  finished_at: string | null;
+  created_at: string;
+  tasks: AssistantTask[];
 };
 
 export type IntakeProjectDetail = IntakeProjectSummary & {
@@ -211,4 +250,5 @@ export type IntakeProjectDetail = IntakeProjectSummary & {
   master_candidates: MasterCandidate[];
   inventories: CadInventory[];
   classification_suggestions: ClassificationSuggestion[];
+  assistant_runs: AssistantRun[];
 };

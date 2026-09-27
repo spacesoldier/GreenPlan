@@ -1,6 +1,6 @@
 # Phase 3, iteration 2 — Project Intake Assistant
 
-- Status: Planned
+- Status: In progress — vertical slice 1 implemented 2026-09-27
 - Target: превратить несистематизированную проектную папку в проверяемый project graph, assembled CAD preview и очередь semantic review
 - Owners: backend, CAD ingestion, ML, frontend, landscape architecture
 - Decisions: [ADR-0018](../adr/0018-evidence-gated-cad-reading-and-conversion.md), [ADR-0019](../adr/0019-resolved-xref-assembly.md), [ADR-0020](../adr/0020-human-reviewed-cad-classification.md), [ADR-0021](../adr/0021-bounded-project-intake-assistant.md), [ADR-0022](../adr/0022-versioned-cad-semantic-taxonomy-and-learning-loop.md), [ADR-0023](../adr/0023-typed-decision-provider-jev-and-laya.md)
@@ -35,6 +35,35 @@
 
 Итерация не начинает pipeline заново, а оборачивает существующие функции в наблюдаемый
 assistant run и расширяет семантический контракт.
+
+## Implementation checkpoint — 2026-09-27
+
+Реализован первый сквозной срез:
+
+- migration `011`: taxonomy registry, feature snapshots, immutable classification review
+  events, assistant runs и typed task DAG;
+- стабильный fingerprint поставки с версиями orchestration, taxonomy и provider;
+- идемпотентный `POST /v1/intake/projects/{project_id}/assistant-runs` и persisted status;
+- четыре этапа `inventory -> (xref_graph, semantic_taxonomy) -> summary` с dependency gate,
+  attempts, heartbeat, progress, terminal state и безопасным повторным запуском;
+- taxonomy `cad-v1` с независимыми осями `domain`, `lifecycle`, `representation`,
+  `object_class`, `document_role`;
+- provider-neutral typed choice validation и общий Jev-compatible adapter; Laya использует
+  тот же контракт, а ошибка provider сохраняет rule-only fallback;
+- allowlisted feature snapshot: внешнему provider не передаются полная геометрия и
+  произвольные поля;
+- UI cockpit с run fingerprint, версиями, progress и состояниями задач;
+- старые неподтверждённые плоские layer suggestions переводятся в `superseded`, тогда как
+  принятые review events не переписываются повторным анализом.
+
+Live smoke test на проекте «Старый Гай»: run завершён как `review_required`, четыре задачи
+выполнены, критические XREF findings сохранились. Это подтверждает механизм, но не закрывает
+exit gate всей фазы.
+
+Остаются следующие work packages: candidate scoring для ambiguous XREF, preview manifest
+diff, contractor profiles, batch multi-axis correction UI, optional Laya container,
+frozen/gold manifests и сравнительный прогон всех 20 проектов. До их завершения статус фазы
+остаётся `In progress`.
 
 ## In scope
 

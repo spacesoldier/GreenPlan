@@ -42,10 +42,11 @@ export function ProjectIntake({ projectId }: { projectId: string }) {
   }, [load]);
 
   useEffect(() => {
-    if (project?.intake_state !== "analyzing") return;
+    const runActive = project?.assistant_runs?.some((run) => ["queued", "running"].includes(run.state));
+    if (project?.intake_state !== "analyzing" && !runActive) return;
     const timer = window.setInterval(() => load().catch(() => undefined), 1800);
     return () => window.clearInterval(timer);
-  }, [load, project?.intake_state]);
+  }, [load, project?.intake_state, project?.assistant_runs]);
 
   async function upload(files: FileList | null) {
     if (!files?.length) return;
@@ -82,6 +83,8 @@ export function ProjectIntake({ projectId }: { projectId: string }) {
 
   if (!project) return <main className="intake-loading"><span className="loader" /><strong>{error || "Открываем проект…"}</strong></main>;
   const mayAnalyze = project.file_count > 0 && !["analyzing", "published"].includes(project.intake_state);
+  const assistantRun = project.assistant_runs[0];
+  const assistantActive = assistantRun && ["queued", "running"].includes(assistantRun.state);
   const mayReview = project.intake_state === "review_required"
     && !!selectedMaster
     && project.critical_count === 0
@@ -118,7 +121,12 @@ export function ProjectIntake({ projectId }: { projectId: string }) {
 
           <article className="intake-card">
             <div className="card-heading"><div><span>02</span><h2>Контролируемый анализ</h2></div><p>Прямое чтение DWG, fallback через ODA, инвентаризация DXF и проверка внешних ссылок.</p></div>
-            <button className="action-primary analyze-button" disabled={!mayAnalyze || !!busy} onClick={() => action("analyze", `/v1/intake/projects/${projectId}/analyze`)}>{project.intake_state === "analyzing" ? "Анализ выполняется…" : "Запустить анализ поставки"}</button>
+            <button className="action-primary analyze-button" disabled={!mayAnalyze || !!busy || !!assistantActive} onClick={() => action("assistant", `/v1/intake/projects/${projectId}/assistant-runs`)}>{assistantActive ? "Ассистент выполняет разбор…" : "Запустить ассистента поставки"}</button>
+            {assistantRun && <section className="assistant-run" aria-label="Ход работы ассистента">
+              <header><div><strong>{assistantRun.state.replaceAll("_", " ")}</strong><small>{assistantRun.taxonomy_version} · {assistantRun.provider_version} · {assistantRun.input_fingerprint.slice(0, 10)}</small></div><b>{Math.round(assistantRun.progress * 100)}%</b></header>
+              <div className="assistant-progress"><i style={{ width: `${assistantRun.progress * 100}%` }} /></div>
+              <ol>{assistantRun.tasks.map((task) => <li key={task.id} className={`assistant-task task-${task.state}`}><i /><div><strong>{task.title}</strong><small>{task.error_summary || `${task.state.replaceAll("_", " ")} · попыток ${task.attempts}`}</small></div></li>)}</ol>
+            </section>}
             <div className="stage-list">
               {project.stages.length === 0 ? <p className="empty-line">После запуска здесь появится журнал этапов.</p> : project.stages.map((stage) => (
                 <details className="stage-row" key={stage.id}><summary><i className={`stage-dot stage-${stage.state}`} /><div><strong>{stage.stage.replaceAll("_", " ")}</strong><small>{stage.error_summary || `${Math.round(stage.progress * 100)}% · попытка ${stage.attempt_no}`}</small></div><span>{stage.state.replaceAll("_", " ")}</span></summary>{(stage.stderr || stage.stdout) && <pre>{stage.stderr || stage.stdout}</pre>}</details>
@@ -135,7 +143,9 @@ export function ProjectIntake({ projectId }: { projectId: string }) {
                 .slice(0, 30)
                 .map((item) => <div className="classification-row" key={item.id}>
                   <span>{item.target_kind === "file" ? "Файл" : "Слой"}</span>
-                  <div><strong title={item.target_label}>{item.target_label}</strong><small>{item.suggested_category.replaceAll("_", " ")} · {Math.round(item.confidence * 100)}% · {item.method}</small></div>
+                  <div><strong title={item.target_label}>{item.target_label}</strong><small>{item.axis_results.axes
+                    ? Object.entries(item.axis_results.axes).map(([axis, value]) => `${axis}: ${value.label}`).join(" · ")
+                    : `${item.suggested_category.replaceAll("_", " ")} · ${Math.round(item.confidence * 100)}% · ${item.method}`}</small></div>
                   <button disabled={!!busy} onClick={() => reviewClassification(item.id, "reject")}>×</button>
                   <button className="classification-accept" disabled={!!busy} onClick={() => reviewClassification(item.id, "accept")}>✓</button>
                 </div>)}

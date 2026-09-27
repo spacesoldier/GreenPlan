@@ -8,8 +8,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 COPY apps/api/pyproject.toml apps/api/uv.lock ./
+RUN python -c "import tomllib; print(chr(10).join(tomllib.load(open('pyproject.toml','rb'))['project']['dependencies']))" \
+      > /tmp/requirements.txt \
+    && pip install --no-cache-dir -r /tmp/requirements.txt
+
 COPY apps/api/src ./src
-RUN pip install --no-cache-dir .
+RUN pip install --no-cache-dir --no-deps .
 
 RUN useradd --create-home --uid 10001 greenplan
 USER greenplan
