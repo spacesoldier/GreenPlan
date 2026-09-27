@@ -70,7 +70,9 @@ def create_or_resume_run(database_url: str, project_id: UUID) -> tuple[UUID, boo
             """SELECT pr.id AS revision_id,pw.delivery_id
                FROM catalog.project_revisions pr
                JOIN intake.project_workflows pw ON pw.revision_id=pr.id
-               WHERE pr.project_id=%s ORDER BY pr.revision_no DESC LIMIT 1""",
+               JOIN catalog.projects p ON p.id=pr.project_id
+               WHERE pr.project_id=%s AND p.deleted_at IS NULL
+               ORDER BY pr.revision_no DESC LIMIT 1""",
             (project_id,),
         )
         revision = cursor.fetchone()

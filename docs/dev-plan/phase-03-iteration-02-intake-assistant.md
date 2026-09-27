@@ -53,6 +53,8 @@ assistant run и расширяет семантический контракт.
 - allowlisted feature snapshot: внешнему provider не передаются полная геометрия и
   произвольные поля;
 - UI cockpit с run fingerprint, версиями, progress и состояниями задач;
+- обратимое удаление тестовых проектов с первой страницы без потери поставок и evidence
+  ([ADR-0024](../adr/0024-prototype-project-soft-delete.md));
 - старые неподтверждённые плоские layer suggestions переводятся в `superseded`, тогда как
   принятые review events не переписываются повторным анализом.
 

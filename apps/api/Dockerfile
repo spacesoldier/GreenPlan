@@ -13,7 +13,7 @@ RUN python -c "import tomllib; print(chr(10).join(tomllib.load(open('pyproject.t
     && pip install --no-cache-dir -r /tmp/requirements.txt
 
 COPY apps/api/src ./src
-RUN pip install --no-cache-dir --no-deps .
+ENV PYTHONPATH=/app/src
 
 RUN useradd --create-home --uid 10001 greenplan
 USER greenplan

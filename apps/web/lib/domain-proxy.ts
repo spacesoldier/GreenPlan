@@ -33,7 +33,7 @@ export async function proxyDomainRequest(
     });
     const contentType = request.headers.get("Content-Type");
     if (contentType) headers.set("Content-Type", contentType);
-    const hasBody = request.method !== "GET" && request.method !== "HEAD";
+    const hasBody = request.method !== "GET" && request.method !== "HEAD" && request.body !== null;
     const init: RequestInit & { duplex?: "half" } = {
       method: request.method,
       headers,
@@ -53,7 +53,11 @@ export async function proxyDomainRequest(
     );
     const cacheControl = upstream.headers.get("Cache-Control");
     if (cacheControl) responseHeaders.set("Cache-Control", cacheControl);
-    return new Response(upstream.body, { status: upstream.status, headers: responseHeaders });
+    const responseHasNoBody = request.method === "HEAD" || [204, 205, 304].includes(upstream.status);
+    return new Response(responseHasNoBody ? null : upstream.body, {
+      status: upstream.status,
+      headers: responseHeaders,
+    });
   } catch (error) {
     if (request.signal.aborted) {
       return proxyError(499, "request_cancelled", "request was cancelled", correlationId);

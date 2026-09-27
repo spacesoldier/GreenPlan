@@ -96,6 +96,27 @@ describe("domain proxy", () => {
     expect(response.status).toBe(201);
   });
 
+  it("forwards project soft delete without inventing a request body", async () => {
+    const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+      expect(init.method).toBe("DELETE");
+      expect(init.body).toBeUndefined();
+      return new Response(null, { status: 204 });
+    });
+    const request = new Request("http://web/api/domain/v1/intake/projects/project-1", {
+      method: "DELETE",
+    });
+
+    const response = await proxyDomainRequest(
+      request,
+      ["v1", "intake", "projects", "project-1"],
+      fetchMock as typeof fetch,
+      "http://api:8000",
+    );
+
+    expect(response.status).toBe(204);
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
   it("forwards private cache policy for immutable model geometry", async () => {
     const fetchMock = vi.fn(async () => new Response("{}", {
       headers: { "Cache-Control": "private, max-age=300, stale-while-revalidate=3600" },

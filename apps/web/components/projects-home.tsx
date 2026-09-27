@@ -23,6 +23,7 @@ export function ProjectsHome() {
   const [intake, setIntake] = useState<IntakeProjectSummary[]>([]);
   const [state, setState] = useState<State>("loading");
   const [error, setError] = useState("");
+  const [deleting, setDeleting] = useState("");
 
   useEffect(() => {
     const controller = new AbortController();
@@ -46,6 +47,21 @@ export function ProjectsHome() {
     const intakeIds = new Set(intake.map((project) => project.id));
     return published.filter((project) => !intakeIds.has(project.id));
   }, [intake, published]);
+
+  async function deleteProject(project: IntakeProjectSummary) {
+    if (!window.confirm(`Убрать проект «${project.title}» из рабочего списка?\n\nДанные останутся в базе и смогут быть восстановлены.`)) return;
+    setDeleting(project.id);
+    setError("");
+    try {
+      await domainJson(`/v1/intake/projects/${project.id}`, { method: "DELETE" });
+      setIntake((items) => items.filter((item) => item.id !== project.id));
+      setPublished((items) => items.filter((item) => item.id !== project.id));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Не удалось удалить проект");
+    } finally {
+      setDeleting("");
+    }
+  }
 
   return (
     <main className="projects-page">
@@ -72,21 +88,24 @@ export function ProjectsHome() {
           </Link>
 
           {intake.map((project, index) => (
-            <Link className="project-tile" href={`/projects/${project.id}`} key={project.id}>
-              <div className={`project-cover cover-${index % 4}`}>
-                <span>{project.code.slice(0, 2).toUpperCase()}</span>
-                <i /><i /><i />
-              </div>
-              <div className="project-tile-body">
-                <div className="project-state-line">
-                  <span className={`intake-state state-${project.intake_state}`}>{stateLabels[project.intake_state] ?? project.intake_state}</span>
-                  {project.critical_count > 0 && <span className="critical-count">{project.critical_count} крит.</span>}
+            <article className="project-tile" key={project.id}>
+              <Link className="project-tile-link" href={`/projects/${project.id}`}>
+                <div className={`project-cover cover-${index % 4}`}>
+                  <span>{project.code.slice(0, 2).toUpperCase()}</span>
+                  <i /><i /><i />
                 </div>
-                <h2>{project.title}</h2>
-                <p>{project.file_count} файлов · {formatBytes(project.total_bytes)} · {project.cad_count} CAD</p>
-                <footer><span>{project.code}</span><time>{new Date(project.updated_at).toLocaleDateString("ru-RU")}</time></footer>
-              </div>
-            </Link>
+                <div className="project-tile-body">
+                  <div className="project-state-line">
+                    <span className={`intake-state state-${project.intake_state}`}>{stateLabels[project.intake_state] ?? project.intake_state}</span>
+                    {project.critical_count > 0 && <span className="critical-count">{project.critical_count} крит.</span>}
+                  </div>
+                  <h2>{project.title}</h2>
+                  <p>{project.file_count} файлов · {formatBytes(project.total_bytes)} · {project.cad_count} CAD</p>
+                  <footer><span>{project.code}</span><time>{new Date(project.updated_at).toLocaleDateString("ru-RU")}</time></footer>
+                </div>
+              </Link>
+              <button className="project-delete" type="button" disabled={deleting === project.id} onClick={() => deleteProject(project)} aria-label={`Удалить проект ${project.title}`} title="Убрать проект из списка">{deleting === project.id ? "···" : "×"}</button>
+            </article>
           ))}
 
           {standalonePublished.map((project, index) => (
@@ -106,6 +125,7 @@ export function ProjectsHome() {
           {state === "loading" && [0, 1, 2].map((value) => <div className="project-tile project-skeleton" key={value} />)}
         </section>
       )}
+      {error && state !== "error" && <div className="toast-error" role="alert">{error}<button onClick={() => setError("")}>×</button></div>}
     </main>
   );
 }

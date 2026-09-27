@@ -41,6 +41,7 @@ from .intake_service import (
     register_upload,
     review_revision,
     review_classification,
+    soft_delete_project,
     store_stream,
 )
 from .assistant import create_or_resume_run, execute_run, reconcile_project_runs
@@ -173,12 +174,23 @@ def create_app(repository: Repository | None = None) -> FastAPI:
     @app.get("/v1/intake/projects/{project_id}", response_model=IntakeProjectDetail, tags=["intake"])
     def get_intake_project(project_id: UUID, repo: Repo):
         database_url, _workspace_code, root = intake_settings(repo)
+        if repo.get_intake_project(project_id) is None:
+            raise ApiError(404, "project_not_found", "intake project does not exist")
         refresh_workflow(database_url, root, project_id)
         reconcile_project_runs(database_url, project_id)
         project = repo.get_intake_project(project_id)
         if project is None:
             raise ApiError(404, "project_not_found", "intake project does not exist")
         return project
+
+    @app.delete("/v1/intake/projects/{project_id}", status_code=204, tags=["intake"])
+    def delete_intake_project(project_id: UUID, repo: Repo):
+        database_url, workspace_code, _root = intake_settings(repo)
+        try:
+            soft_delete_project(database_url, workspace_code, project_id)
+        except KeyError as exc:
+            raise ApiError(404, "project_not_found", "intake project does not exist") from exc
+        return Response(status_code=204)
 
     @app.post(
         "/v1/intake/projects/{project_id}/files",
@@ -193,6 +205,8 @@ def create_app(repository: Repository | None = None) -> FastAPI:
         file: Annotated[UploadFile, File()],
     ):
         database_url, _workspace_code, root = intake_settings(repo)
+        if repo.get_intake_project(project_id) is None:
+            raise ApiError(404, "project_not_found", "intake project does not exist")
         try:
             safe_path = normalize_relative_path(relative_path)
         except ValueError as exc:
@@ -263,6 +277,8 @@ def create_app(repository: Repository | None = None) -> FastAPI:
     )
     def get_intake_assistant_run(project_id: UUID, run_id: UUID, repo: Repo):
         database_url, _workspace_code, root = intake_settings(repo)
+        if repo.get_intake_project(project_id) is None:
+            raise ApiError(404, "assistant_run_not_found", "assistant run does not exist")
         refresh_workflow(database_url, root, project_id)
         reconcile_project_runs(database_url, project_id)
         project = repo.get_intake_project(project_id)
@@ -274,6 +290,8 @@ def create_app(repository: Repository | None = None) -> FastAPI:
     @app.post("/v1/intake/projects/{project_id}/review", response_model=IntakeActionResult, tags=["intake"])
     def review_intake_project(project_id: UUID, payload: IntakeReviewRequest, repo: Repo):
         database_url, _workspace_code, root = intake_settings(repo)
+        if repo.get_intake_project(project_id) is None:
+            raise ApiError(404, "project_not_found", "intake project does not exist")
         refresh_workflow(database_url, root, project_id)
         try:
             revision_id, state, verdict = review_revision(
@@ -297,6 +315,8 @@ def create_app(repository: Repository | None = None) -> FastAPI:
         repo: Repo,
     ):
         database_url, _workspace_code, _root = intake_settings(repo)
+        if repo.get_intake_project(project_id) is None:
+            raise ApiError(404, "project_not_found", "intake project does not exist")
         try:
             review_classification(
                 database_url, project_id, suggestion_id, payload.decision,
@@ -309,6 +329,8 @@ def create_app(repository: Repository | None = None) -> FastAPI:
     @app.post("/v1/intake/projects/{project_id}/publish", response_model=IntakeActionResult, tags=["intake"])
     def publish_intake_project(project_id: UUID, repo: Repo):
         database_url, _workspace_code, root = intake_settings(repo)
+        if repo.get_intake_project(project_id) is None:
+            raise ApiError(404, "project_not_found", "intake project does not exist")
         try:
             model_id = publish_revision(database_url, root, project_id)
         except IntakeConflict as exc:

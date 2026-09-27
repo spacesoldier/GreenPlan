@@ -257,6 +257,51 @@ def create_project(database_url: str, workspace_code: str, code: str, title: str
     return project_id
 
 
+def soft_delete_project(
+    database_url: str,
+    workspace_code: str,
+    project_id: UUID,
+    reason: str = "deleted from projects dashboard",
+) -> bool:
+    """Hide a project without deleting any delivery, evidence, artifact, or review row.
+
+    Returns True when this call created the tombstone and False for an already deleted
+    project. A missing project is distinct and raises KeyError.
+    """
+    with _connect(database_url) as connection, connection.cursor() as cursor:
+        cursor.execute(
+            """SELECT p.id,p.deleted_at
+               FROM catalog.projects p
+               JOIN catalog.workspaces w ON w.id=p.workspace_id
+               WHERE p.id=%s AND w.code=%s""",
+            (project_id, workspace_code),
+        )
+        project = cursor.fetchone()
+        if project is None:
+            raise KeyError(project_id)
+        if project["deleted_at"] is not None:
+            return False
+        cursor.execute(
+            """UPDATE catalog.projects
+               SET deleted_at=now(),deletion_reason=%s,updated_at=now()
+               WHERE id=%s AND deleted_at IS NULL""",
+            (reason, project_id),
+        )
+        cursor.execute(
+            """UPDATE intake.assistant_runs ar SET cancel_requested=true,heartbeat_at=now()
+               FROM catalog.project_revisions pr
+               WHERE ar.revision_id=pr.id AND pr.project_id=%s
+                 AND ar.state IN ('queued','running')""",
+            (project_id,),
+        )
+        cursor.execute(
+            """INSERT INTO audit.events(action,entity_schema,entity_table,entity_id,metadata)
+               VALUES ('soft_delete','catalog','projects',%s,%s)""",
+            (project_id, Jsonb({"reason": reason, "recoverable": True})),
+        )
+        return True
+
+
 def register_upload(
     database_url: str,
     project_id: UUID,
@@ -278,7 +323,7 @@ def register_upload(
                  WHERE value.project_id=p.id ORDER BY revision_no DESC LIMIT 1
                ) pr ON true
                JOIN intake.project_workflows pw ON pw.revision_id=pr.id
-               WHERE p.id=%s""",
+               WHERE p.id=%s AND p.deleted_at IS NULL""",
             (project_id,),
         )
         project = cursor.fetchone()

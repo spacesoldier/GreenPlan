@@ -40,6 +40,12 @@ def test_openapi_exposes_phase_two_contract(client):
     assert EXPECTED_ROUTES <= set(response.json()["paths"])
 
 
+def test_openapi_exposes_project_soft_delete(client):
+    response = client.get("/openapi.json")
+
+    assert "delete" in response.json()["paths"]["/v1/intake/projects/{project_id}"]
+
+
 def test_invalid_uuid_uses_stable_error_envelope(client):
     response = client.get("/v1/projects/not-a-uuid")
 

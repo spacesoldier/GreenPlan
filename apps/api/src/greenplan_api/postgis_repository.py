@@ -94,7 +94,7 @@ class PostgisRepository:
                 WHERE value.project_revision_id = pr.id ORDER BY value.version_no DESC LIMIT 1
             ) cm ON true
             JOIN catalog.coordinate_spaces cs ON cs.id = cm.coordinate_space_id
-            WHERE w.code = %s
+            WHERE w.code = %s AND p.deleted_at IS NULL
         """
 
     def list_projects(self) -> list[ProjectSummary]:
@@ -134,7 +134,7 @@ class PostgisRepository:
               WHERE value.project_id=p.id ORDER BY revision_no DESC LIMIT 1
             ) pr ON true
             JOIN intake.project_workflows pw ON pw.revision_id=pr.id
-            WHERE w.code=%s
+            WHERE w.code=%s AND p.deleted_at IS NULL
         """
 
     def list_intake_projects(self) -> list[IntakeProjectSummary]:
@@ -287,7 +287,7 @@ class PostgisRepository:
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 """SELECT 1 FROM catalog.projects p JOIN catalog.workspaces w ON w.id=p.workspace_id
-                   WHERE p.id=%s AND w.code=%s""",
+                   WHERE p.id=%s AND w.code=%s AND p.deleted_at IS NULL""",
                 (project_id, self.workspace_code),
             )
             if cursor.fetchone() is None:
