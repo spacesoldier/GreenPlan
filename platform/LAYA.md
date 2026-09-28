@@ -3,6 +3,7 @@
 Laya is optional and is not started by the ordinary `docker compose up` command. The first start
 downloads the multilingual checkpoint into the host directory `platform/data/laya-cache`; allow
 approximately 10 GB of free disk for the CPU image, dependencies and cache.
+The image installs the CPU-only PyTorch wheel explicitly; this prevents pip from pulling CUDA runtime packages on hosts without a GPU.
 
 ```bash
 cd platform
