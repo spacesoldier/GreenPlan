@@ -14,8 +14,10 @@ from greenplan_api.intake_service import (
 )
 from greenplan_api.classification import classify_delivery_path, needs_model_assist
 from greenplan_api.decision_models import (
+    CAD_LAYER_CATEGORY_CRITERIA,
     DecisionProviderError,
     TypedChoiceQuestion,
+    laya_layer_category,
     validate_typed_answers,
 )
 from greenplan_api.cad_assembly import assemble_xrefs, delivery_xref_resolver, xref_insertions
@@ -147,6 +149,33 @@ def test_typed_provider_rejects_unknown_labels_and_question_ids():
             {"answers": {"unexpected": {"choice": "vegetation", "confidence": 1.0}}},
             questions,
         )
+
+
+def test_layer_provider_uses_allowlisted_snapshot_and_validates_category(monkeypatch):
+    captured = {}
+
+    def fake_decide(_url, *, state, questions, timeout, api_key):
+        captured.update(state)
+        assert set(questions["object_class"].choices) == set(CAD_LAYER_CATEGORY_CRITERIA)
+        return {"object_class": type("Answer", (), {
+            "choice": "utility.unknown", "confidence": 0.82,
+            "probabilities": {"utility.unknown": 0.82, "unknown": 0.18},
+        })()}
+
+    monkeypatch.setattr("greenplan_api.decision_models.typed_decide", fake_decide)
+    result = laya_layer_category(
+        "http://laya:8000",
+        feature_snapshot={
+            "schema_version": "cad-layer-features-v1", "layer_name": "КЛ связи",
+            "entity_types": {"LINE": 12}, "entity_count": 12,
+            "document_role": "general_plan", "relative_path": "plan.dwg",
+            "geometry": "must not leave the service", "secret": "no",
+        },
+    )
+    assert result.category == "utility.unknown"
+    assert result.confidence == 0.82
+    assert "geometry" not in captured and "secret" not in captured
+    assert set(captured) == {"schema_version", "layer_name", "entity_types", "entity_count", "document_role", "relative_path"}
 
 
 def test_xref_assembly_embeds_child_and_preserves_insert_transform(tmp_path):

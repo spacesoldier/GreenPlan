@@ -269,6 +269,22 @@ export type AssistantRun = {
   tasks: AssistantTask[];
 };
 
+export type SemanticSuggestionJob = {
+  id: string;
+  source_asset_id: string;
+  provider: string;
+  model: string;
+  state: string;
+  total_count: number;
+  completed_count: number;
+  failed_count: number;
+  error_summary: string | null;
+  started_at: string | null;
+  heartbeat_at: string | null;
+  finished_at: string | null;
+  created_at: string;
+};
+
 export type IntakeProjectDetail = IntakeProjectSummary & {
   description: string | null;
   files: IntakeFile[];
@@ -281,6 +297,7 @@ export type IntakeProjectDetail = IntakeProjectSummary & {
   classification_suggestions: ClassificationSuggestion[];
   assistant_runs: AssistantRun[];
   xref_dependencies: CadXrefDependency[];
+  semantic_suggestion_jobs: SemanticSuggestionJob[];
 };
 
 export type CadXrefDependency = {

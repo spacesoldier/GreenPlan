@@ -345,6 +345,26 @@ class FindingResolutionRequest(ApiModel):
     reason: str = Field(min_length=3, max_length=2000)
 
 
+class SemanticSuggestionRequest(ApiModel):
+    source_asset_id: UUID
+
+
+class SemanticSuggestionJobView(ApiModel):
+    id: UUID
+    source_asset_id: UUID
+    provider: str
+    model: str
+    state: str
+    total_count: int
+    completed_count: int
+    failed_count: int
+    error_summary: str | None = None
+    started_at: datetime | None = None
+    heartbeat_at: datetime | None = None
+    finished_at: datetime | None = None
+    created_at: datetime
+
+
 class CadXrefDependency(ApiModel):
     id: UUID
     source_asset_id: UUID
@@ -371,6 +391,7 @@ class IntakeProjectDetail(IntakeProjectSummary):
     classification_suggestions: list[ClassificationSuggestionView] = Field(default_factory=list)
     assistant_runs: list[AssistantRunView] = Field(default_factory=list)
     xref_dependencies: list[CadXrefDependency] = Field(default_factory=list)
+    semantic_suggestion_jobs: list[SemanticSuggestionJobView] = Field(default_factory=list)
 
 
 class IntakeUploadResult(ApiModel):

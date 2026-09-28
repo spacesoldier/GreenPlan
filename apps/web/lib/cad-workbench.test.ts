@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildDeliveryTree, groupLayerFamilies, normalizedLayerName } from "./cad-workbench";
+import { buildDeliveryTree, clampTrayHeight, groupLayerFamilies, normalizedLayerName, wizardStepStates } from "./cad-workbench";
 import type { CadLayer, IntakeFile } from "./contracts";
 
 describe("CAD workbench projections", () => {
@@ -20,5 +20,18 @@ describe("CAD workbench projections", () => {
     const different = { ...base, id: "3", entity_types: { MTEXT: 2 } } as CadLayer;
     expect(normalizedLayerName("  Ёлки---новые ")).toBe("елки новые");
     expect([...groupLayerFamilies([base, same, different]).values()].map((items) => items.length).sort()).toEqual([1, 2]);
+  });
+
+  it("clamps the resizable bottom tray", () => {
+    expect(clampTrayHeight(90, 900)).toBe(180);
+    expect(clampTrayHeight(430, 900)).toBe(430);
+    expect(clampTrayHeight(850, 900)).toBe(675);
+  });
+
+  it("does not mark review and publication complete prematurely", () => {
+    expect(wizardStepStates({ fileCount: 12, cadCount: 4, openFindings: 2, published: false }))
+      .toEqual(["complete", "complete", "current", "upcoming"]);
+    expect(wizardStepStates({ fileCount: 12, cadCount: 4, openFindings: 0, published: true }))
+      .toEqual(["complete", "complete", "complete", "complete"]);
   });
 });

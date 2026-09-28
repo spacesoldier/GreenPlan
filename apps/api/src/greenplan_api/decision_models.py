@@ -20,6 +20,23 @@ DELIVERY_ROLE_CRITERIA = {
     "unknown": "Недостаточно признаков для классификации",
 }
 
+CAD_LAYER_CATEGORY_CRITERIA = {
+    "vegetation.existing": "Существующие деревья, кустарники и другие зелёные насаждения",
+    "vegetation.proposed": "Проектируемые посадки деревьев, кустарников и озеленение",
+    "surface.lawn": "Газон, трава, почвопокровное озеленение или озеленённая поверхность",
+    "transport.road": "Дороги, проезды, тротуары, бордюры и транспортные покрытия",
+    "utility.unknown": "Инженерные сети, трубопроводы, кабели и коммуникации неясного типа",
+    "structure.building": "Здания, строения и сооружения",
+    "territory.work_boundary": "Границы работ, участков, охранных или санитарных зон",
+    "terrain": "Рельеф, горизонтали и высотные отметки",
+    "not_applicable": "Текст, размеры, рамка, штамп, легенда или служебная графика",
+    "unknown": "Недостаточно данных или смешанное содержимое",
+}
+
+LAYER_FEATURE_ALLOWLIST = (
+    "schema_version", "layer_name", "entity_types", "entity_count", "document_role", "relative_path",
+)
+
 
 class DecisionProviderError(RuntimeError):
     pass
@@ -131,4 +148,40 @@ def laya_delivery_role(
         cues=("Laya typed choice",),
         alternatives=tuple(alternatives),
         method="laya-jev-http-v1",
+    )
+
+
+def laya_layer_category(
+    base_url: str,
+    *,
+    feature_snapshot: Mapping[str, object],
+    timeout: float = 20.0,
+    api_key: str | None = None,
+) -> ClassificationSuggestion:
+    """Request an advisory category using only the approved CAD layer feature schema."""
+    state = {key: feature_snapshot[key] for key in LAYER_FEATURE_ALLOWLIST if key in feature_snapshot}
+    answers = typed_decide(
+        base_url,
+        state=state,
+        questions={"object_class": TypedChoiceQuestion(
+            instructions=(
+                "Определи наиболее вероятную категорию слоя ландшафтного CAD-проекта. "
+                "Не делай вывод по одной букве; при неоднозначности выбери unknown."
+            ),
+            choices=CAD_LAYER_CATEGORY_CRITERIA,
+        )},
+        timeout=timeout,
+        api_key=api_key,
+    )
+    answer = answers["object_class"]
+    alternatives = sorted(
+        ((key, value) for key, value in answer.probabilities.items() if key != answer.choice),
+        key=lambda item: -item[1],
+    )[:3]
+    return ClassificationSuggestion(
+        category=answer.choice,
+        confidence=answer.confidence,
+        cues=("Laya multilingual typed choice",),
+        alternatives=tuple(alternatives),
+        method="laya-layer-jev-v1",
     )

@@ -45,14 +45,16 @@ ADR фиксируют архитектурное решение, его кон�
 | [0018](0018-evidence-gated-cad-reading-and-conversion.md) | Accepted | Reader-first DWG обработка, контролируемая конвертация и обязательный fidelity/XREF gate |
 | [0019](0019-resolved-xref-assembly.md) | Accepted | Рекурсивная сборка разрешённого XREF-графа с сохранением INSERT transforms |
 | [0020](0020-human-reviewed-cad-classification.md) | Accepted | Rule-first подсказки для файлов и CAD-слоёв, модель только за human review gate |
-| [0021](0021-bounded-project-intake-assistant.md) | Proposed | Ограниченный ассистент превращает delivery в project/XREF/semantic graph и review queue |
-| [0022](0022-versioned-cad-semantic-taxonomy-and-learning-loop.md) | Proposed | Многомерная taxonomy, feature snapshots и контролируемое обучение на review events |
-| [0023](0023-typed-decision-provider-jev-and-laya.md) | Proposed | Provider-neutral typed decisions, benchmark Jev/Laya и rule-only fallback |
+| [0021](0021-bounded-project-intake-assistant.md) | Accepted | Ограниченный ассистент превращает delivery в project/XREF/semantic graph и review queue |
+| [0022](0022-versioned-cad-semantic-taxonomy-and-learning-loop.md) | Accepted | Многомерная taxonomy, feature snapshots и контролируемое обучение на review events |
+| [0023](0023-typed-decision-provider-jev-and-laya.md) | Accepted | Provider-neutral typed decisions, benchmark Jev/Laya и rule-only fallback |
 | [0024](0024-prototype-project-soft-delete.md) | Accepted | Обратимое скрытие intake-проектов без потери результатов экспериментов |
 | [0025](0025-folder-ingest-and-visible-xref-dependency-tree.md) | Accepted | Настоящая загрузка каталога и диагностическое дерево XREF текущей поставки |
 | [0026](0026-intake-activity-stream-and-supported-file-boundary.md) | Accepted | Живой журнал обработки и allowlist CAD/табличных файлов intake |
 | [0027](0027-context-first-cad-layer-inspection.md) | Accepted | Контекстный инспектор слоёв и review-корпус до fine-tuning |
 | [0028](0028-cad-workbench-graph-navigation-bulk-review-and-activity-dock.md) | Accepted | CAD workbench, graph/tree navigation, batch review, typed issues и нижний activity dock |
+| [0029](0029-preparation-wizard-selection-inspector-and-resizable-tray.md) | Accepted | Верхний мастер, selection-driven CAD inspector и resizable bottom tray |
+| [0030](0030-local-cad-semantic-suggestion-worker.md) | Accepted | Локальный Laya service и фоновая очередь model suggestions для CAD-слоёв |
 
 ## Именование
 

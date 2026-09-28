@@ -54,6 +54,7 @@ services:
       GREENPLAN_INTAKE_ROOT: /intake
       CELERY_BROKER_URL: redis://redis:6379/0
       LAYA_URL: ${LAYA_URL:-}
+      SEMANTIC_LAYA_URL: http://laya:8000
       LAYA_API_KEY: ${LAYA_API_KEY:-}
       HOME: /tmp
       XDG_CACHE_HOME: /tmp/.cache
@@ -101,6 +102,50 @@ services:
     depends_on:
       api:
         condition: service_healthy
+
+  laya:
+    profiles: ["ai"]
+    build:
+      context: ..
+      dockerfile: platform/laya.Dockerfile
+    environment:
+      USE_TF: "0"
+      HF_HOME: /models/huggingface
+      LAYA_MODEL: multilingual
+      LAYA_PRELOAD: "1"
+      LAYA_MODELS: multilingual
+      LAYA_THREADS: ${LAYA_THREADS:-4}
+      LAYA_API_KEY: ${LAYA_API_KEY:-greenplan_local_only}
+    volumes:
+      - ./data/laya-cache:/models/huggingface
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 60
+      start_period: 180s
+    restart: unless-stopped
+
+  semantic-worker:
+    profiles: ["ai"]
+    build:
+      context: ..
+      dockerfile: apps/api/Dockerfile
+    environment:
+      GREENPLAN_DATABASE_URL: postgresql://${POSTGIS_USER:-greenplan_domain}:${POSTGIS_PASSWORD:-greenplan_domain_dev_only}@postgis:5432/${POSTGIS_DB:-greenplan_domain}
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      LAYA_URL: http://laya:8000
+      LAYA_API_KEY: ${LAYA_API_KEY:-greenplan_local_only}
+    depends_on:
+      postgis:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      laya:
+        condition: service_healthy
+    command: ["celery", "-A", "greenplan_api.semantic_worker:celery", "worker", "--loglevel=INFO", "--queues=semantic", "--hostname=semantic@%h", "--concurrency=1", "--prefetch-multiplier=1"]
+    restart: unless-stopped
 
   oda-worker:
     build:

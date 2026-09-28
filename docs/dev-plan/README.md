@@ -26,6 +26,7 @@ draft ADR -> accepted ADR -> planned phase -> tests written/failing
 | [Phase 3](phase-03-controlled-project-intake.md) | In progress | Создание проекта, загрузка поставки, reader-first DWG pipeline, XREF graph и доказательный fidelity gate; [XREF/classification checkpoint](phase-03-checkpoint-xref-classification.md) |
 | [Phase 3, iteration 2](phase-03-iteration-02-intake-assistant.md) | Planned | Ассистент разбора смешанной поставки, XREF assembly, versioned taxonomy и прогон 20 проектов |
 | [Phase 3, iteration 3](phase-03-iteration-03-cad-workbench.md) | In progress | Workbench vertical slice: delivery/CAD trees, layer-family batch review, typed issues и нижний журнал |
+| [Phase 3, iteration 4](phase-03-iteration-04-guided-cad-review.md) | In progress | Верхний мастер, selection inspector, resizable tray и локальные AI-подсказки слоёв; [checkpoint 1](phase-03-iteration-04-checkpoint-01.md) |
 | [Phase 4](phase-04-review-and-planning.md) | Planned | OSM review, нормативный review и первый детерминированный constraint/planting workflow |
 
 ## Обязательная структура будущей фазы

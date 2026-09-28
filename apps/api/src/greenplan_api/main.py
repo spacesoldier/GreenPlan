@@ -22,6 +22,8 @@ from .models import (
     ClassificationReviewRequest,
     ClassificationBatchReviewRequest,
     FindingResolutionRequest,
+    SemanticSuggestionRequest,
+    SemanticSuggestionJobView,
     AssistantRunView,
     IntakeUploadResult,
     ModelList,
@@ -49,6 +51,12 @@ from .intake_service import (
     store_stream,
 )
 from .assistant import create_or_resume_run, execute_run, reconcile_project_runs
+from .semantic_jobs import (
+    create_semantic_suggestion_job,
+    enqueue_semantic_suggestion_job,
+    get_semantic_suggestion_job,
+    semantic_provider_ready,
+)
 
 
 class ApiError(Exception):
@@ -347,6 +355,47 @@ def create_app(repository: Repository | None = None) -> FastAPI:
         except IntakeConflict as exc:
             raise ApiError(409, "batch_review_conflict", str(exc)) from exc
         return {"status": "recorded", "batch_id": str(batch_id), "count": len(payload.suggestion_ids)}
+
+    @app.post(
+        "/v1/intake/projects/{project_id}/semantic-suggestion-jobs",
+        response_model=SemanticSuggestionJobView,
+        status_code=202,
+        tags=["intake"],
+    )
+    def start_semantic_suggestion_job(
+        project_id: UUID, payload: SemanticSuggestionRequest, repo: Repo,
+    ):
+        database_url, _workspace_code, _root = intake_settings(repo)
+        if repo.get_intake_project(project_id) is None:
+            raise ApiError(404, "project_not_found", "intake project does not exist")
+        broker_url = os.getenv("CELERY_BROKER_URL")
+        if not broker_url:
+            raise ApiError(503, "semantic_queue_unavailable", "CELERY_BROKER_URL is not configured")
+        provider_url = os.getenv("SEMANTIC_LAYA_URL", "http://laya:8000")
+        if not semantic_provider_ready(provider_url):
+            raise ApiError(
+                503, "semantic_provider_unavailable",
+                "Локальная модель не запущена. Запустите Compose profile ai; rule-подсказки остаются доступны.",
+            )
+        try:
+            job, created = create_semantic_suggestion_job(database_url, project_id, payload.source_asset_id)
+        except KeyError as exc:
+            raise ApiError(404, "cad_document_not_found", str(exc)) from exc
+        if created:
+            enqueue_semantic_suggestion_job(broker_url, job["id"])
+        return SemanticSuggestionJobView(**job)
+
+    @app.get(
+        "/v1/intake/projects/{project_id}/semantic-suggestion-jobs/{job_id}",
+        response_model=SemanticSuggestionJobView,
+        tags=["intake"],
+    )
+    def read_semantic_suggestion_job(project_id: UUID, job_id: UUID, repo: Repo):
+        database_url, _workspace_code, _root = intake_settings(repo)
+        job = get_semantic_suggestion_job(database_url, project_id, job_id)
+        if job is None:
+            raise ApiError(404, "semantic_job_not_found", "semantic suggestion job does not exist")
+        return SemanticSuggestionJobView(**job)
 
     @app.post("/v1/intake/projects/{project_id}/findings/{finding_id}/resolve", tags=["intake"])
     def resolve_intake_finding(

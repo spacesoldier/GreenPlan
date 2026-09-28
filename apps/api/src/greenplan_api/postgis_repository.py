@@ -24,6 +24,7 @@ from .models import (
     ClassificationSuggestionView,
     AssistantRunView,
     AssistantTaskView,
+    SemanticSuggestionJobView,
     ModelSummary,
     ObjectDetail,
     ProjectDetail,
@@ -234,9 +235,14 @@ class PostgisRepository:
                    JOIN intake.cad_documents cd ON cd.id=cl.cad_document_id
                    JOIN intake.delivery_entries de ON de.delivery_id=%s
                                                   AND de.source_asset_id=cd.source_asset_id
-                   JOIN intake.classification_suggestions cs ON cs.cad_layer_id=cl.id
-                                                            AND cs.revision_id=%s
-                                                            AND cs.method='multi-axis-rules-v2'
+                   JOIN LATERAL (
+                     SELECT candidate.* FROM intake.classification_suggestions candidate
+                     WHERE candidate.cad_layer_id=cl.id AND candidate.revision_id=%s
+                       AND candidate.review_status<>'superseded'
+                     ORDER BY CASE WHEN candidate.method='laya-layer-jev-v1' THEN 0 ELSE 1 END,
+                              candidate.created_at DESC
+                     LIMIT 1
+                   ) cs ON true
                    ORDER BY de.relative_path,cl.entity_count DESC,cl.name""",
                 (summary.delivery_id, summary.revision_id),
             )
@@ -296,12 +302,20 @@ class PostgisRepository:
                     (run_row["id"],),
                 )
                 runs.append(AssistantRunView(**run_row, tasks=[AssistantTaskView(**task) for task in cursor.fetchall()]))
+            cursor.execute(
+                """SELECT id,source_asset_id,provider,model,state,total_count,completed_count,
+                          failed_count,error_summary,started_at,heartbeat_at,finished_at,created_at
+                   FROM intake.semantic_suggestion_jobs WHERE revision_id=%s
+                   ORDER BY created_at DESC LIMIT 20""",
+                (summary.revision_id,),
+            )
+            semantic_jobs = [SemanticSuggestionJobView(**row) for row in cursor.fetchall()]
             return IntakeProjectDetail(
                 **summary.model_dump(), description=description, files=files, stages=stages,
                 findings=findings, master_candidates=candidates, inventories=inventories,
                 cad_spaces=spaces, cad_layers=layers,
                 classification_suggestions=suggestions, assistant_runs=runs,
-                xref_dependencies=xrefs,
+                xref_dependencies=xrefs, semantic_suggestion_jobs=semantic_jobs,
             )
 
     def get_assistant_run(self, run_id: UUID) -> AssistantRunView | None:

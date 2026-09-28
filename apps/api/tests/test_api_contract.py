@@ -52,6 +52,12 @@ def test_openapi_exposes_cad_workbench_review_operations(client):
     assert "post" in paths["/v1/intake/projects/{project_id}/findings/{finding_id}/resolve"]
 
 
+def test_openapi_exposes_background_semantic_suggestions(client):
+    paths = client.get("/openapi.json").json()["paths"]
+    assert "post" in paths["/v1/intake/projects/{project_id}/semantic-suggestion-jobs"]
+    assert "get" in paths["/v1/intake/projects/{project_id}/semantic-suggestion-jobs/{job_id}"]
+
+
 def test_invalid_uuid_uses_stable_error_envelope(client):
     response = client.get("/v1/projects/not-a-uuid")
 

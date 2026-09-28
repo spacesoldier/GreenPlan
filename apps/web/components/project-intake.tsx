@@ -1,12 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState, type InputHTMLAttributes } from "react";
+import { useCallback, useEffect, useState, type CSSProperties, type InputHTMLAttributes, type PointerEvent as ReactPointerEvent } from "react";
 
 import type { IntakeProjectDetail } from "@/lib/contracts";
 import { domainJson, formatBytes } from "@/lib/domain-client";
 import { inspectFolderSelection, isSupportedProjectFile, partitionProjectFiles, relativeUploadPath } from "@/lib/folder-selection";
-import { buildDeliveryTree, groupLayerFamilies, type DeliveryTreeNode } from "@/lib/cad-workbench";
+import { buildDeliveryTree, clampTrayHeight, groupLayerFamilies, wizardStepStates, type DeliveryTreeNode } from "@/lib/cad-workbench";
 
 const stateLabels: Record<string, string> = {
   draft: "Черновик", receiving: "Приём файлов", analyzing: "Анализ",
@@ -28,10 +28,6 @@ const stageLabels: Record<string, string> = {
   fidelity_check: "Проверка полноты", classification: "Классификация",
 };
 
-function xrefIdentity(path: string | null, name: string): string {
-  return (path || name).replaceAll("\\", "/").replace(/^\.\.\//, "").toLocaleLowerCase();
-}
-
 function DeliveryNodes({ nodes }: { nodes: DeliveryTreeNode[] }) {
   return <>{nodes.map((node) => node.kind === "folder"
     ? <details className="wb-tree-folder" key={node.id} open><summary><span>⌄</span>{node.label}<small>{node.children.length}</small></summary><div><DeliveryNodes nodes={node.children} /></div></details>
@@ -44,12 +40,15 @@ export function ProjectIntake({ projectId }: { projectId: string }) {
   const [layerDocument, setLayerDocument] = useState("");
   const [layerQuery, setLayerQuery] = useState("");
   const [layerMode, setLayerMode] = useState<"all" | "unknown" | "reviewed">("unknown");
-  const [workbenchView, setWorkbenchView] = useState<"materials" | "explorer" | "issues" | "publish">("explorer");
+  const [workbenchView, setWorkbenchView] = useState<"materials" | "explorer" | "publish">("explorer");
+  const [selectedCadNode, setSelectedCadNode] = useState<{ kind: "document" | "space" | "layer" | "xref"; id: string }>({ kind: "document", id: "" });
   const [selectedLayerIds, setSelectedLayerIds] = useState<string[]>([]);
   const [bulkCategory, setBulkCategory] = useState("utility.unknown");
   const [selectedFindingId, setSelectedFindingId] = useState("");
   const [findingReason, setFindingReason] = useState("Ограничение принято для текущей редакции.");
   const [dockExpanded, setDockExpanded] = useState(true);
+  const [dockTab, setDockTab] = useState<"issues" | "activity">("activity");
+  const [dockHeight, setDockHeight] = useState(320);
   const [selectedActivityId, setSelectedActivityId] = useState("");
   const [comment, setComment] = useState("Проверено инженером; ограничения преобразования приняты.");
   const [busy, setBusy] = useState("");
@@ -63,6 +62,7 @@ export function ProjectIntake({ projectId }: { projectId: string }) {
     setProject(next);
     setSelectedMaster((current) => current || next.master_candidates.find((item) => item.selected)?.source_asset_id || next.master_candidates[0]?.source_asset_id || "");
     setLayerDocument((current) => current || next.master_candidates[0]?.source_asset_id || next.cad_layers[0]?.source_asset_id || "");
+    setSelectedCadNode((current) => current.id ? current : { kind: "document", id: next.master_candidates[0]?.source_asset_id || next.cad_layers[0]?.source_asset_id || "" });
     return next;
   }, [projectId]);
 
@@ -72,10 +72,33 @@ export function ProjectIntake({ projectId }: { projectId: string }) {
 
   useEffect(() => {
     const runActive = project?.assistant_runs?.some((run) => ["queued", "running"].includes(run.state));
-    if (project?.intake_state !== "analyzing" && !runActive) return;
+    const semanticActive = project?.semantic_suggestion_jobs?.some((job) => ["queued", "running"].includes(job.state));
+    if (project?.intake_state !== "analyzing" && !runActive && !semanticActive) return;
     const timer = window.setInterval(() => load().catch(() => undefined), 1800);
     return () => window.clearInterval(timer);
-  }, [load, project?.intake_state, project?.assistant_runs]);
+  }, [load, project?.intake_state, project?.assistant_runs, project?.semantic_suggestion_jobs]);
+
+  useEffect(() => {
+    const saved = Number(window.localStorage.getItem("greenplan.intake.tray-height"));
+    if (Number.isFinite(saved) && saved > 0) setDockHeight(clampTrayHeight(saved, window.innerHeight));
+  }, []);
+
+  function beginDockResize(event: ReactPointerEvent<HTMLButtonElement>) {
+    event.preventDefault();
+    setDockExpanded(true);
+    const startY = event.clientY;
+    const startHeight = dockHeight;
+    const move = (pointer: PointerEvent) => setDockHeight(clampTrayHeight(startHeight + startY - pointer.clientY, window.innerHeight));
+    const finish = (pointer: PointerEvent) => {
+      const value = clampTrayHeight(startHeight + startY - pointer.clientY, window.innerHeight);
+      setDockHeight(value);
+      window.localStorage.setItem("greenplan.intake.tray-height", String(value));
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", finish);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", finish);
+  }
 
   async function upload(files: FileList | null, mode: "folder" | "files") {
     if (!files?.length) return;
@@ -128,13 +151,6 @@ export function ProjectIntake({ projectId }: { projectId: string }) {
     finally { setBusy(""); }
   }
 
-  async function reviewClassification(id: string, decision: "accept" | "reject", category?: string) {
-    await action(`classification-${id}`, `/v1/intake/projects/${projectId}/classifications/${id}/review`, {
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ decision, category: category || null, comment: "Проверено в intake UI" }),
-    });
-  }
-
   async function reviewSelectedLayers(decision: "accept" | "reject") {
     if (!selectedLayerIds.length) return;
     await action("batch-classification", `/v1/intake/projects/${projectId}/classifications/batch-review`, {
@@ -164,15 +180,6 @@ export function ProjectIntake({ projectId }: { projectId: string }) {
     const values = result.get(xref.source_asset_id) || [];
     values.push(xref); result.set(xref.source_asset_id, values); return result;
   }, new Map<string, typeof project.xref_dependencies>());
-  const dependencyUse = project.xref_dependencies.reduce((result, xref) => {
-    const key = xrefIdentity(xref.original_path, xref.reference_name);
-    const sources = result.get(key) || new Set<string>();
-    sources.add(xref.source_asset_id); result.set(key, sources);
-    return result;
-  }, new Map<string, Set<string>>());
-  const xrefCounts = project.xref_dependencies.reduce<Record<string, number>>((result, xref) => {
-    result[xref.status] = (result[xref.status] || 0) + 1; return result;
-  }, {});
   const filePathById = new Map(project.files.map((file) => [file.id, file.relative_path]));
   const visibleFiles = project.files.filter((file) => isSupportedProjectFile({ name: file.relative_path }));
   const convertedByAsset = new Map(project.inventories
@@ -194,6 +201,13 @@ export function ProjectIntake({ projectId }: { projectId: string }) {
       at: task.finished_at || task.started_at || assistantRun.created_at,
       metrics: { progress: task.progress, attempts: task.attempts, dependencies: task.dependencies }, stdout: "", stderr: task.error_summary || "",
     })),
+    ...(project.semantic_suggestion_jobs || []).map((job) => ({
+      id: `semantic-${job.id}`, state: job.state, title: "Нейросетевая классификация слоёв",
+      detail: `${filePathById.get(job.source_asset_id) || "CAD-документ"} · ${job.completed_count}/${job.total_count}${job.failed_count ? ` · ошибок ${job.failed_count}` : ""}`,
+      at: job.finished_at || job.heartbeat_at || job.started_at || job.created_at,
+      metrics: { provider: job.provider, model: job.model, total: job.total_count, completed: job.completed_count, failed: job.failed_count },
+      stdout: "", stderr: job.error_summary || "",
+    })),
   ].sort((left, right) => Date.parse(right.at) - Date.parse(left.at)).slice(0, 40);
   const layerDocuments = Array.from(new Map(project.cad_layers.map((layer) => [layer.source_asset_id, layer.source_relative_path])).entries());
   const selectedSpaces = project.cad_spaces.filter((space) => space.source_asset_id === layerDocument);
@@ -208,9 +222,32 @@ export function ProjectIntake({ projectId }: { projectId: string }) {
   const selectedFinding = project.findings.find((finding) => finding.id === selectedFindingId) || project.findings[0];
   const selectedFindingInventories = project.inventories.filter((item) => item.source_asset_id === selectedFinding?.source_asset_id);
   const selectedActivity = activityEvents.find((event) => event.id === selectedActivityId) || activityEvents[0];
+  const selectedLayer = project.cad_layers.find((layer) => selectedCadNode.kind === "layer" && layer.id === selectedCadNode.id);
+  const selectedXref = project.xref_dependencies.find((xref) => selectedCadNode.kind === "xref" && xref.id === selectedCadNode.id);
+  const selectedSpace = project.cad_spaces.find((space) => selectedCadNode.kind === "space" && space.id === selectedCadNode.id)
+    || selectedSpaces[0];
+  const semanticJob = project.semantic_suggestion_jobs?.find((job) => job.source_asset_id === layerDocument);
+  const semanticActive = semanticJob && ["queued", "running"].includes(semanticJob.state);
+  const openFindingCount = project.findings.filter((item) => item.status === "open").length;
+  const stepStates = wizardStepStates({
+    fileCount: project.file_count, cadCount: project.cad_count,
+    openFindings: openFindingCount, published: project.intake_state === "published",
+  });
+
+  function selectDocument(assetId: string) {
+    setLayerDocument(assetId);
+    setSelectedCadNode({ kind: "document", id: assetId });
+  }
+
+  function openWizardStep(step: number) {
+    if (step === 0) setWorkbenchView("materials");
+    if (step === 1) setWorkbenchView("explorer");
+    if (step === 2) { setWorkbenchView("explorer"); setDockTab("issues"); setDockExpanded(true); }
+    if (step === 3) setWorkbenchView("publish");
+  }
 
   return (
-    <main className="intake-page">
+    <main className="intake-page" style={{ "--tray-height": `${dockHeight}px` } as CSSProperties}>
       <header className="intake-topbar">
         <Link className="brand-lockup compact" href="/"><span className="brand-mark">G</span><span><strong>GreenPlan</strong><small>Проекты</small></span></Link>
         <nav><Link href="/">Все проекты</Link><span>/</span><strong>{project.title}</strong></nav>
@@ -222,14 +259,17 @@ export function ProjectIntake({ projectId }: { projectId: string }) {
         <div className="intake-hero-status"><span className={`intake-state state-${project.intake_state}`}>{stateLabels[project.intake_state] ?? project.intake_state}</span><strong>{project.file_count}</strong><small>файлов · {formatBytes(project.total_bytes)}</small></div>
       </section>
 
+      <nav className="preparation-wizard" aria-label="Этапы подготовки проекта">
+        {[
+          ["Материалы", `${project.file_count} файлов`],
+          ["CAD-разбор", `${project.cad_layers.length} слоёв`],
+          ["Проверка", openFindingCount ? `${openFindingCount} проблем` : "готово"],
+          ["Публикация", project.intake_state === "published" ? "модель опубликована" : "конечная цель"],
+        ].map(([title, detail], index) => <button key={title} className={`${stepStates[index]} ${(workbenchView === "materials" && index === 0) || (workbenchView === "explorer" && index === 1) || (dockTab === "issues" && dockExpanded && index === 2) || (workbenchView === "publish" && index === 3) ? "active" : ""}`} onClick={() => openWizardStep(index)}><i>{stepStates[index] === "complete" ? "✓" : index + 1}</i><span><b>{title}</b><small>{detail}</small></span></button>)}
+        <div><span>Цель</span><b>Проверенная модель проекта</b></div>
+      </nav>
+
       <section className="intake-layout workbench-layout">
-        <nav className="wb-nav" aria-label="Разделы проекта">
-          <span>Рабочая область</span>
-          <button className={workbenchView === "materials" ? "active" : ""} onClick={() => setWorkbenchView("materials")}><i>01</i><b>Материалы</b><small>{project.file_count} файлов</small></button>
-          <button className={workbenchView === "explorer" ? "active" : ""} onClick={() => setWorkbenchView("explorer")}><i>02</i><b>CAD Explorer</b><small>{project.cad_layers.length} слоёв</small></button>
-          <button className={workbenchView === "issues" ? "active" : ""} onClick={() => setWorkbenchView("issues")}><i>03</i><b>Проблемы</b><small>{project.findings.filter((item) => item.status === "open").length} открыто</small></button>
-          <button className={workbenchView === "publish" ? "active" : ""} onClick={() => setWorkbenchView("publish")}><i>04</i><b>Публикация</b><small>{project.fidelity_verdict || "нет вердикта"}</small></button>
-        </nav>
         <div className="intake-main">
           {workbenchView === "materials" && <>
           <article className="intake-card upload-card">
@@ -265,44 +305,24 @@ export function ProjectIntake({ projectId }: { projectId: string }) {
           </article>
           </>}
 
-          {workbenchView === "explorer" && <>
-          <article className="intake-card xref-card">
-            <div className="card-heading"><div><span>03</span><h2>Связи файлов · XREF</h2></div><p>Дерево показывает, какой DWG подключает зависимость, где она ожидалась и нашёлся ли файл в поставке.</p></div>
-            <div className="xref-summary"><span><b>{project.xref_dependencies.length}</b> ссылок</span><span className="resolved"><b>{xrefCounts.resolved || 0}</b> найдены</span><span className="missing"><b>{xrefCounts.missing || 0}</b> отсутствуют</span><span className="ambiguous"><b>{xrefCounts.ambiguous || 0}</b> неоднозначны</span></div>
-            <div className="xref-tree">
-              {Array.from(xrefsBySource.entries()).map(([sourceId, xrefs]) => <details key={sourceId} open>
-                <summary><i>DWG</i><strong>{xrefs[0].source_relative_path}</strong><span>{xrefs.length} ссылок</span></summary>
-                <div className="xref-children">{xrefs.map((xref) => {
-                  const shared = dependencyUse.get(xrefIdentity(xref.original_path, xref.reference_name))?.size || 1;
-                  return <div className={`xref-edge xref-${xref.status}`} key={xref.id}><i /><div><strong>{xref.reference_name}</strong><code>{xref.original_path || "Путь не записан в DWG"}</code><small>{xref.target_relative_path
-                    ? `Найден: ${xref.target_relative_path}`
-                    : xref.matches.length ? `Кандидаты: ${xref.matches.join(", ")}` : "Совпадений в загруженной поставке нет"}{shared > 1 ? ` · эту зависимость используют ${shared} DWG` : ""}{xref.placement_count ? ` · вставок: ${xref.placement_count}` : ""}</small></div><b>{xref.status}</b></div>;
-                })}</div>
-              </details>)}
-              {!project.xref_dependencies.length && <p className="empty-line">XREF появятся после анализа CAD-файлов.</p>}
-            </div>
-          </article>
-
-          <article className="intake-card">
-            <div className="card-heading"><div><span>04</span><h2>Инспектор слоёв и листов</h2></div><p>Сначала фиксируем факты из DXF, затем подтверждаем семантику. Сейчас работает rules-v2; Laya не подключена.</p></div>
-            <div className="layer-toolbar">
-              <label><span>Документ</span><select value={layerDocument} onChange={(event) => setLayerDocument(event.target.value)}>{layerDocuments.map(([id, path]) => <option key={id} value={id}>{path}</option>)}</select></label>
-              <label><span>Поиск слоя</span><input value={layerQuery} onChange={(event) => setLayerQuery(event.target.value)} placeholder="деревья, кабель…" /></label>
-              <div className="layer-modes"><button className={layerMode === "unknown" ? "active" : ""} onClick={() => setLayerMode("unknown")}>Не разобраны</button><button className={layerMode === "all" ? "active" : ""} onClick={() => setLayerMode("all")}>Все</button><button className={layerMode === "reviewed" ? "active" : ""} onClick={() => setLayerMode("reviewed")}>Проверены</button></div>
-            </div>
+          {workbenchView === "explorer" && <article className="intake-card cad-inspector">
+            <div className="card-heading"><div><span>02</span><h2>Инспектор CAD</h2></div><p>Выберите документ, лист, слой или XREF в дереве слева. Подсказки модели остаются кандидатами до инженерной проверки.</p></div>
+            <div className="document-context"><div><span>Документ</span><strong>{layerDocuments.find(([id]) => id === layerDocument)?.[1] || "Документ не выбран"}</strong></div><div className="xref-summary"><span><b>{(xrefsBySource.get(layerDocument) || []).length}</b> XREF</span><span><b>{selectedSpaces.length}</b> листов</span><span><b>{project.cad_layers.filter((item) => item.source_asset_id === layerDocument).length}</b> слоёв</span></div><button className="ai-suggest-button" disabled={!layerDocument || !!semanticActive || !!busy} onClick={() => action("semantic-suggest", `/v1/intake/projects/${projectId}/semantic-suggestion-jobs`, { headers: { "Content-Type": "application/json" }, body: JSON.stringify({ source_asset_id: layerDocument }) })}>{semanticActive ? `Модель работает · ${semanticJob?.completed_count || 0}/${semanticJob?.total_count || 0}` : "✦ Подсказать категории"}</button></div>
+            {semanticJob && <div className={`semantic-job semantic-${semanticJob.state}`}><b>{semanticJob.provider} · multilingual · experimental</b><span>{semanticJob.state.replaceAll("_", " ")} · {semanticJob.completed_count}/{semanticJob.total_count}{semanticJob.failed_count ? ` · ошибок ${semanticJob.failed_count}` : ""}</span>{semanticJob.error_summary && <small>{semanticJob.error_summary}</small>}</div>}
+            <div className="space-tabs" role="tablist" aria-label="Листы документа">{selectedSpaces.map((space) => <button role="tab" aria-selected={selectedSpace?.id === space.id} className={selectedSpace?.id === space.id ? "active" : ""} key={space.id} onClick={() => setSelectedCadNode({ kind: "space", id: space.id })}><i>{space.space_kind === "model" ? "M" : "Л"}</i><span>{space.name}</span><small>{space.entity_count.toLocaleString("ru-RU")}</small></button>)}{!selectedSpaces.length && <p className="empty-line">Пространства документа не найдены.</p>}</div>
+            {selectedSpace && <p className="space-scope-note">Показаны слои документа для вкладки «{selectedSpace.name}». Точная видимость по viewport появится после нормализации per-space layer states.</p>}
+            {selectedXref && <section className="selected-object-card"><span>XREF · {selectedXref.status}</span><h3>{selectedXref.reference_name}</h3><code>{selectedXref.original_path || "Путь не записан"}</code><p>{selectedXref.target_relative_path ? `Цель: ${selectedXref.target_relative_path}` : selectedXref.matches.length ? `Кандидаты: ${selectedXref.matches.join(", ")}` : "Файл не найден в текущей поставке."}</p>{selectedXref.referenced_asset_id && <button onClick={() => selectDocument(selectedXref.referenced_asset_id!)}>Перейти к целевому документу</button>}</section>}
+            {selectedLayer && <section className="selected-object-card"><span>Слой · {selectedLayer.method}</span><h3>{selectedLayer.name}</h3><p>{selectedLayer.entity_count.toLocaleString("ru-RU")} объектов · подсказка <b>{selectedLayer.suggested_category}</b> · {Math.round((selectedLayer.confidence || 0) * 100)}%</p><div className="entity-tags">{Object.entries(selectedLayer.entity_types).map(([kind, count]) => <span key={kind}>{kind} <b>{count}</b></span>)}</div></section>}
+            <div className="layer-toolbar"><label><span>Поиск слоя</span><input value={layerQuery} onChange={(event) => setLayerQuery(event.target.value)} placeholder="деревья, кабель…" /></label><div className="layer-modes"><button className={layerMode === "unknown" ? "active" : ""} onClick={() => setLayerMode("unknown")}>Не разобраны</button><button className={layerMode === "all" ? "active" : ""} onClick={() => setLayerMode("all")}>Все</button><button className={layerMode === "reviewed" ? "active" : ""} onClick={() => setLayerMode("reviewed")}>Проверены</button></div></div>
             <div className="bulk-review-bar"><span>Выбрано: <b>{selectedLayerIds.length}</b></span><select value={bulkCategory} onChange={(event) => setBulkCategory(event.target.value)}><option value="utility.unknown">Инженерные сети</option><option value="transport.road">Дороги и проезды</option><option value="surface.lawn">Покрытия и газоны</option><option value="vegetation.existing">Существующая растительность</option><option value="vegetation.proposed">Проектируемая растительность</option><option value="structure.building">Здания и сооружения</option><option value="terrain">Рельеф</option><option value="territory.work_boundary">Границы и зоны</option><option value="not_applicable">Служебное / неприменимо</option><option value="unknown">Не определено</option></select><button disabled={!selectedLayerIds.length || !!busy} onClick={() => reviewSelectedLayers("reject")}>Отклонить</button><button className="action-primary" disabled={!selectedLayerIds.length || !!busy} onClick={() => reviewSelectedLayers("accept")}>Назначить категорию</button></div>
-            <div className="space-strip">{selectedSpaces.map((space) => <div className={`space-chip space-${space.space_kind}`} key={space.id}><b>{space.space_kind === "model" ? "MODEL" : "ЛИСТ"}</b><span>{space.name}</span><small>{space.entity_count.toLocaleString("ru-RU")} объектов</small></div>)}{!selectedSpaces.length && <p className="empty-line">Пространства документа не найдены.</p>}</div>
             <div className="layer-table"><header><span>Слой / семейство</span><span>Состав</span><span>Классификация</span><span>Выбор</span></header>{layerFamilies.map(([familyKey, members]) => {
               const layer = members[0];
               const axes = layer.axis_results.axes;
               const suggestionIds = members.filter((item) => item.review_status === "pending").map((item) => item.suggestion_id);
               const selected = suggestionIds.length > 0 && suggestionIds.every((id) => selectedLayerIds.includes(id));
-              return <div className="layer-row" key={familyKey}><div><strong>{layer.name}</strong><small>{members.reduce((sum, item) => sum + item.entity_count, 0).toLocaleString("ru-RU")} объектов · {members.length} в семействе · {Math.round((layer.confidence || 0) * 100)}%</small></div><div className="entity-tags">{Object.entries(layer.entity_types).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([kind, count]) => <span key={kind}>{kind} <b>{count}</b></span>)}</div><div className="axis-grid">{axes ? Object.entries(axes).slice(0, 4).map(([axis, value]) => <span key={axis}><em>{axis}</em>{value.label}</span>) : <span>{layer.suggested_category}</span>}</div><div className="layer-family-select"><input type="checkbox" aria-label={`Выбрать семейство ${layer.name}`} disabled={!suggestionIds.length} checked={selected} onChange={() => setSelectedLayerIds((current) => selected ? current.filter((id) => !suggestionIds.includes(id)) : Array.from(new Set([...current, ...suggestionIds])))} /><small>{suggestionIds.length || "✓"}</small></div></div>;
+              return <div className={`layer-row ${selectedCadNode.kind === "layer" && selectedCadNode.id === layer.id ? "selected" : ""}`} key={familyKey} onClick={() => setSelectedCadNode({ kind: "layer", id: layer.id })}><div><strong>{layer.name}</strong><small>{members.reduce((sum, item) => sum + item.entity_count, 0).toLocaleString("ru-RU")} объектов · {members.length} в семействе · {layer.method} · {Math.round((layer.confidence || 0) * 100)}%</small></div><div className="entity-tags">{Object.entries(layer.entity_types).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([kind, count]) => <span key={kind}>{kind} <b>{count}</b></span>)}</div><div className="axis-grid">{axes ? Object.entries(axes).slice(0, 4).map(([axis, value]) => <span key={axis}><em>{axis}</em>{value.label}</span>) : <span>{layer.suggested_category}</span>}</div><div className="layer-family-select"><input type="checkbox" aria-label={`Выбрать семейство ${layer.name}`} disabled={!suggestionIds.length} checked={selected} onChange={() => setSelectedLayerIds((current) => selected ? current.filter((id) => !suggestionIds.includes(id)) : Array.from(new Set([...current, ...suggestionIds])))} /><small>{suggestionIds.length || "✓"}</small></div></div>;
             })}{!selectedLayers.length && <p className="empty-line">В выбранном режиме слоёв нет.</p>}</div>
-          </article>
-          </>}
-
-          {workbenchView === "issues" && <article className="intake-card issues-workbench"><div className="card-heading"><div><span>03</span><h2>Проблемы и ограничения</h2></div><p>Выберите проблему слева: справа появятся evidence, действия и последствия решения.</p></div><div className="issue-split"><div className="issue-queue">{project.findings.map((finding) => <button className={`${finding.id === selectedFinding?.id ? "active" : ""} issue-${finding.severity}`} key={finding.id} onClick={() => setSelectedFindingId(finding.id)}><i /><span><strong>{finding.title}</strong><small>{finding.code} · {finding.status}</small></span></button>)}</div>{selectedFinding ? <section className="issue-detail"><header><span>{selectedFinding.severity}</span><h3>{selectedFinding.title}</h3><p>{selectedFinding.detail}</p></header><dl><div><dt>Этап</dt><dd>{selectedFinding.stage}</dd></div><div><dt>Код</dt><dd>{selectedFinding.code}</dd></div><div><dt>Статус</dt><dd>{selectedFinding.status}</dd></div></dl>{selectedFindingInventories.length > 0 && <div className="fidelity-comparison">{selectedFindingInventories.map((inventory) => <div key={inventory.id}><header><b>{inventory.stage}</b><span>{inventory.tool_name || inventory.format}</span></header><dl><div><dt>Объекты</dt><dd>{String(inventory.metrics.entity_count ?? "—")}</dd></div><div><dt>Слои</dt><dd>{String(inventory.metrics.layer_count ?? "—")}</dd></div><div><dt>Листы</dt><dd>{String(inventory.metrics.layout_count ?? "—")}</dd></div></dl>{inventory.artifact_locator && <code>{inventory.artifact_locator}</code>}</div>)}</div>}<details open><summary>Evidence</summary><pre>{JSON.stringify(selectedFinding.evidence, null, 2)}</pre></details>{selectedFinding.resolution?.reason && <div className="issue-resolution"><b>{selectedFinding.resolution.action}</b><p>{selectedFinding.resolution.reason}</p></div>}<label className="issue-reason">Обоснование решения<textarea rows={3} value={findingReason} onChange={(event) => setFindingReason(event.target.value)} /></label><div className="issue-actions"><button disabled={!!busy} onClick={() => action("retry-search", `/v1/intake/projects/${projectId}/assistant-runs`)}>Повторить поиск/анализ</button><button onClick={() => resolveSelectedFinding("reopen")}>Вернуть в работу</button><button className="reject-button" onClick={() => resolveSelectedFinding("block")}>Блокировать</button><button className="action-primary" onClick={() => resolveSelectedFinding("waive")}>Игнорировать в редакции</button></div></section> : <p className="empty-line">Проблем нет.</p>}</div></article>}
+          </article>}
 
           {workbenchView === "publish" && <article className="intake-card">
             <div className="card-heading"><div><span>05</span><h2>Вердикт и публикация</h2></div><p>Мастер выбирает человек. Неоднозначности и потери остаются видимыми в журнале.</p></div>
@@ -315,13 +335,18 @@ export function ProjectIntake({ projectId }: { projectId: string }) {
           </article>}
         </div>
 
-        <aside className="intake-aside">
+        <aside className="intake-aside wb-tree-pane">
           {workbenchView === "materials" && <article className="intake-card"><h3>Дерево поставки</h3><div className="delivery-tree"><DeliveryNodes nodes={deliveryTree} /></div></article>}
-          {workbenchView === "explorer" && <article className="intake-card"><h3>CAD-граф</h3><div className="cad-nav-tree">{layerDocuments.map(([assetId, path]) => { const refs = xrefsBySource.get(assetId) || []; return <details key={assetId} open={assetId === layerDocument}><summary onClick={() => setLayerDocument(assetId)}><span>DWG</span><b>{path}</b></summary><button onClick={() => setLayerDocument(assetId)}>▦ Пространства <small>{project.cad_spaces.filter((item) => item.source_asset_id === assetId).length}</small></button><button onClick={() => setLayerDocument(assetId)}>≡ Слои <small>{project.cad_layers.filter((item) => item.source_asset_id === assetId).length}</small></button><div className="cad-ref-branch"><em>Внешние ссылки</em>{refs.map((xref) => <button className={`ref-${xref.status}`} key={xref.id} title={xref.original_path || ""} disabled={!xref.referenced_asset_id} onClick={() => xref.referenced_asset_id && setLayerDocument(xref.referenced_asset_id)}><span>↗</span><b>{xref.reference_name}</b><small>{xref.target_relative_path ? "alias → " + xref.target_relative_path : xref.status}</small></button>)}</div></details>; })}</div></article>}
-          <article className="intake-card"><h3>Контроль качества</h3><div className="quality-metrics"><div><strong>{project.cad_count}</strong><span>CAD-файлов</span></div><div><strong>{project.finding_count}</strong><span>наблюдений</span></div><div className={project.critical_count ? "danger" : ""}><strong>{project.critical_count}</strong><span>критических</span></div></div><p className="verdict">Вердикт <b>{project.fidelity_verdict?.replaceAll("_", " ") || "ещё не сформирован"}</b></p></article>
+          {workbenchView === "explorer" && <article className="intake-card cad-tree-card"><header><div><span>Структура проекта</span><h3>CAD-граф</h3></div><small>Документы, листы, слои и зависимости</small></header><div className="cad-nav-tree">{layerDocuments.map(([assetId, path]) => { const refs = xrefsBySource.get(assetId) || []; const spaces = project.cad_spaces.filter((item) => item.source_asset_id === assetId); const layers = project.cad_layers.filter((item) => item.source_asset_id === assetId); return <details key={assetId} open={assetId === layerDocument}><summary className={selectedCadNode.kind === "document" && selectedCadNode.id === assetId ? "selected" : ""} onClick={() => selectDocument(assetId)}><span>DWG</span><b>{path}</b></summary><div className="cad-tree-group"><em>Листы</em>{spaces.map((space) => <button className={selectedCadNode.kind === "space" && selectedCadNode.id === space.id ? "selected" : ""} key={space.id} onClick={() => { setLayerDocument(assetId); setSelectedCadNode({ kind: "space", id: space.id }); }}><span>{space.space_kind === "model" ? "M" : "Л"}</span><b>{space.name}</b><small>{space.entity_count}</small></button>)}</div><details className="cad-tree-subtree"><summary><b>Слои</b><small>{layers.length}</small></summary><div className="cad-tree-layers">{layers.map((layer) => <button className={selectedCadNode.kind === "layer" && selectedCadNode.id === layer.id ? "selected" : ""} key={layer.id} onClick={() => { setLayerDocument(assetId); setSelectedCadNode({ kind: "layer", id: layer.id }); }}><span>≡</span><b>{layer.name}</b><small>{layer.suggested_category}</small></button>)}</div></details><div className="cad-tree-group"><em>Внешние ссылки</em>{refs.map((xref) => <button className={`ref-${xref.status} ${selectedCadNode.kind === "xref" && selectedCadNode.id === xref.id ? "selected" : ""}`} key={xref.id} title={xref.original_path || ""} onClick={() => { setLayerDocument(assetId); setSelectedCadNode({ kind: "xref", id: xref.id }); }}><span>↗</span><b>{xref.reference_name}</b><small>{xref.target_relative_path ? "alias" : xref.status}</small></button>)}</div></details>; })}</div></article>}
+          {workbenchView === "publish" && <article className="intake-card"><h3>Контроль качества</h3><div className="quality-metrics"><div><strong>{project.cad_count}</strong><span>CAD-файлов</span></div><div><strong>{project.finding_count}</strong><span>наблюдений</span></div><div className={project.critical_count ? "danger" : ""}><strong>{project.critical_count}</strong><span>критических</span></div></div><p className="verdict">Вердикт <b>{project.fidelity_verdict?.replaceAll("_", " ") || "ещё не сформирован"}</b></p></article>}
         </aside>
       </section>
-      <section className={`activity-dock ${dockExpanded ? "expanded" : "collapsed"}`}><button className="activity-dock-toggle" onClick={() => setDockExpanded((value) => !value)}><i className={assistantActive || busy === "upload" ? "is-live" : ""} /><b>Журнал действий</b><span>{selectedActivity?.title || "Событий пока нет"}</span><em>{activityEvents.length}</em><strong>{dockExpanded ? "⌄" : "⌃"}</strong></button>{dockExpanded && <div className="activity-dock-body"><div className="activity-stream">{activityEvents.map((event) => <button className={`activity-event activity-${event.state} ${event.id === selectedActivity?.id ? "selected" : ""}`} key={event.id} onClick={() => setSelectedActivityId(event.id)}><i /><time>{new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(event.at))}</time><div><strong>{event.title}</strong><small>{event.detail}</small></div></button>)}</div><aside>{selectedActivity ? <><span>{selectedActivity.state}</span><h3>{selectedActivity.title}</h3><p>{selectedActivity.detail}</p><dl><div><dt>Время</dt><dd>{new Date(selectedActivity.at).toLocaleString("ru-RU")}</dd></div><div><dt>ID события</dt><dd>{selectedActivity.id}</dd></div></dl><details open><summary>Метрики</summary><pre>{JSON.stringify(selectedActivity.metrics, null, 2)}</pre></details>{(selectedActivity.stderr || selectedActivity.stdout) && <details><summary>Технический вывод</summary><pre>{selectedActivity.stderr || selectedActivity.stdout}</pre></details>}<p className="activity-hint">Artifact locator показан в описании завершённой конвертации.</p></> : <p>Выберите событие.</p>}</aside></div>}</section>
+      <section className={`activity-dock ${dockExpanded ? "expanded" : "collapsed"}`} style={{ "--tray-height": `${dockHeight}px` } as CSSProperties}>
+        {dockExpanded && <button className="activity-dock-resizer" aria-label="Изменить высоту нижней панели" onPointerDown={beginDockResize} />}
+        <header className="activity-dock-tabs"><i className={assistantActive || semanticActive || busy === "upload" ? "is-live" : ""} /><button className={dockTab === "issues" ? "active" : ""} onClick={() => { setDockTab("issues"); setDockExpanded(true); }}>Проблемы <em>{openFindingCount}</em></button><button className={dockTab === "activity" ? "active" : ""} onClick={() => { setDockTab("activity"); setDockExpanded(true); }}>Журнал действий <em>{activityEvents.length}</em></button><span>{dockTab === "activity" ? selectedActivity?.title || "Событий пока нет" : selectedFinding?.title || "Проблем нет"}</span><button className="dock-collapse" onClick={() => setDockExpanded((value) => !value)}>{dockExpanded ? "⌄" : "⌃"}</button></header>
+        {dockExpanded && dockTab === "activity" && <div className="activity-dock-body"><div className="activity-stream">{activityEvents.map((event) => <button className={`activity-event activity-${event.state} ${event.id === selectedActivity?.id ? "selected" : ""}`} key={event.id} onClick={() => setSelectedActivityId(event.id)}><i /><time>{new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(event.at))}</time><div><strong>{event.title}</strong><small>{event.detail}</small></div></button>)}</div><aside>{selectedActivity ? <><span>{selectedActivity.state}</span><h3>{selectedActivity.title}</h3><p>{selectedActivity.detail}</p><dl><div><dt>Время</dt><dd>{new Date(selectedActivity.at).toLocaleString("ru-RU")}</dd></div><div><dt>ID события</dt><dd>{selectedActivity.id}</dd></div></dl><details open><summary>Метрики</summary><pre>{JSON.stringify(selectedActivity.metrics, null, 2)}</pre></details>{(selectedActivity.stderr || selectedActivity.stdout) && <details><summary>Технический вывод</summary><pre>{selectedActivity.stderr || selectedActivity.stdout}</pre></details>}<p className="activity-hint">Artifact locator показан в описании завершённой конвертации.</p></> : <p>Выберите событие.</p>}</aside></div>}
+        {dockExpanded && dockTab === "issues" && <div className="tray-issues issue-split"><div className="issue-queue">{project.findings.map((finding) => <button className={`${finding.id === selectedFinding?.id ? "active" : ""} issue-${finding.severity}`} key={finding.id} onClick={() => setSelectedFindingId(finding.id)}><i /><span><strong>{finding.title}</strong><small>{finding.code} · {finding.status}</small></span></button>)}</div>{selectedFinding ? <section className="issue-detail"><header><span>{selectedFinding.severity}</span><h3>{selectedFinding.title}</h3><p>{selectedFinding.detail}</p></header><dl><div><dt>Этап</dt><dd>{selectedFinding.stage}</dd></div><div><dt>Код</dt><dd>{selectedFinding.code}</dd></div><div><dt>Статус</dt><dd>{selectedFinding.status}</dd></div></dl>{selectedFindingInventories.length > 0 && <div className="fidelity-comparison">{selectedFindingInventories.map((inventory) => <div key={inventory.id}><header><b>{inventory.stage}</b><span>{inventory.tool_name || inventory.format}</span></header><dl><div><dt>Объекты</dt><dd>{String(inventory.metrics.entity_count ?? "—")}</dd></div><div><dt>Слои</dt><dd>{String(inventory.metrics.layer_count ?? "—")}</dd></div><div><dt>Листы</dt><dd>{String(inventory.metrics.layout_count ?? "—")}</dd></div></dl>{inventory.artifact_locator && <code>{inventory.artifact_locator}</code>}</div>)}</div>}<details><summary>Evidence</summary><pre>{JSON.stringify(selectedFinding.evidence, null, 2)}</pre></details>{selectedFinding.resolution?.reason && <div className="issue-resolution"><b>{selectedFinding.resolution.action}</b><p>{selectedFinding.resolution.reason}</p></div>}<label className="issue-reason">Обоснование решения<textarea rows={2} value={findingReason} onChange={(event) => setFindingReason(event.target.value)} /></label><div className="issue-actions"><button disabled={!!busy} onClick={() => action("retry-search", `/v1/intake/projects/${projectId}/assistant-runs`)}>Повторить анализ</button><button onClick={() => resolveSelectedFinding("reopen")}>Вернуть</button><button className="reject-button" onClick={() => resolveSelectedFinding("block")}>Блокировать</button><button className="action-primary" onClick={() => resolveSelectedFinding("waive")}>Игнорировать в редакции</button></div></section> : <p className="empty-line">Проблем нет.</p>}</div>}
+      </section>
       {error && <div className="toast-error" role="alert">{error}<button onClick={() => setError("")}>×</button></div>}
     </main>
   );

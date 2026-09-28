@@ -49,3 +49,25 @@ export function groupLayerFamilies(layers: CadLayer[]): Map<string, CadLayer[]> 
     return groups;
   }, new Map<string, CadLayer[]>());
 }
+
+export function clampTrayHeight(value: number, viewportHeight: number): number {
+  return Math.round(Math.min(Math.max(value, 180), Math.max(180, viewportHeight * 0.75)));
+}
+
+export function wizardStepStates(input: {
+  fileCount: number;
+  cadCount: number;
+  openFindings: number;
+  published: boolean;
+}): Array<"complete" | "current" | "upcoming"> {
+  const materialDone = input.fileCount > 0;
+  const cadDone = input.cadCount > 0;
+  const reviewDone = cadDone && input.openFindings === 0;
+  if (input.published) return ["complete", "complete", "complete", "complete"];
+  return [
+    materialDone ? "complete" : "current",
+    cadDone ? "complete" : materialDone ? "current" : "upcoming",
+    reviewDone ? "complete" : cadDone ? "current" : "upcoming",
+    reviewDone ? "current" : "upcoming",
+  ];
+}
