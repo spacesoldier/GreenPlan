@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { buildDeliveryTree, clampTrayHeight, groupLayerFamilies, normalizedLayerName, wizardStepStates } from "./cad-workbench";
-import type { CadLayer, IntakeFile } from "./contracts";
+import { buildCadDependencyForest, buildDeliveryTree, clampDockSplit, clampTrayHeight, clampTreeWidth, groupLayerFamilies, normalizedLayerName, wizardStepStates } from "./cad-workbench";
+import type { CadLayer, CadXrefDependency, IntakeFile } from "./contracts";
 
 describe("CAD workbench projections", () => {
   it("builds a stable physical folder tree", () => {
@@ -28,10 +28,37 @@ describe("CAD workbench projections", () => {
     expect(clampTrayHeight(850, 900)).toBe(675);
   });
 
+  it("clamps the bottom dock column split", () => {
+    expect(clampDockSplit(120, 1400)).toBe(280);
+    expect(clampDockSplit(620, 1400)).toBe(620);
+    expect(clampDockSplit(1300, 1400)).toBe(1040);
+  });
+
+  it("clamps the resizable project tree", () => {
+    expect(clampTreeWidth(120, 1400)).toBe(300);
+    expect(clampTreeWidth(420, 1400)).toBe(420);
+    expect(clampTreeWidth(900, 1400)).toBe(644);
+  });
+
+  it("projects resolved XREFs below their source documents", () => {
+    const dependency = { id: "edge-1", source_asset_id: "head", referenced_asset_id: "base", reference_name: "base", status: "resolved" } as CadXrefDependency;
+    const missing = { id: "edge-2", source_asset_id: "head", referenced_asset_id: null, reference_name: "missing", status: "missing" } as CadXrefDependency;
+    const forest = buildCadDependencyForest([["head", "head.dwg"], ["base", "xref/base.dwg"]], [dependency, missing]);
+    expect(forest).toHaveLength(1);
+    expect(forest[0].assetId).toBe("head");
+    expect(forest[0].children[0].assetId).toBe("base");
+    expect(forest[0].children[0].via?.id).toBe("edge-1");
+    expect(forest[0].unresolved[0].id).toBe("edge-2");
+  });
+
   it("does not mark review and publication complete prematurely", () => {
-    expect(wizardStepStates({ fileCount: 12, cadCount: 4, openFindings: 2, published: false }))
+    expect(wizardStepStates({ fileCount: 12, cadCount: 4, cadAnalyzed: false, openFindings: 2, reviewAccepted: false, published: false }))
+      .toEqual(["complete", "current", "upcoming", "upcoming"]);
+    expect(wizardStepStates({ fileCount: 12, cadCount: 4, cadAnalyzed: true, openFindings: 2, reviewAccepted: false, published: false }))
       .toEqual(["complete", "complete", "current", "upcoming"]);
-    expect(wizardStepStates({ fileCount: 12, cadCount: 4, openFindings: 0, published: true }))
+    expect(wizardStepStates({ fileCount: 12, cadCount: 4, cadAnalyzed: true, openFindings: 0, reviewAccepted: false, published: false }))
+      .toEqual(["complete", "complete", "current", "upcoming"]);
+    expect(wizardStepStates({ fileCount: 12, cadCount: 4, cadAnalyzed: true, openFindings: 0, reviewAccepted: true, published: true }))
       .toEqual(["complete", "complete", "complete", "complete"]);
   });
 });

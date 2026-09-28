@@ -17,6 +17,8 @@ from .decision_models import DecisionProviderError, laya_layer_category
 PROVIDER = "laya"
 MODEL = "convaiinnovations/laya:multilingual"
 METHOD = "laya-layer-jev-v1"
+JOB_VIEW_COLUMNS = """id,source_asset_id,provider,model,state,total_count,completed_count,failed_count,
+                      error_summary,started_at,heartbeat_at,finished_at,created_at"""
 
 
 def _connect(database_url: str):
@@ -58,7 +60,7 @@ def create_semantic_suggestion_job(
             "provider": PROVIDER, "model": MODEL, "features": scope["fingerprints"],
         }, sort_keys=True).encode()).hexdigest()
         cursor.execute(
-            """SELECT * FROM intake.semantic_suggestion_jobs
+            f"""SELECT {JOB_VIEW_COLUMNS} FROM intake.semantic_suggestion_jobs
                WHERE revision_id=%s AND source_asset_id=%s AND provider=%s AND model=%s
                  AND state IN ('queued','running') ORDER BY created_at DESC LIMIT 1""",
             (scope["revision_id"], source_asset_id, PROVIDER, MODEL),
@@ -68,9 +70,9 @@ def create_semantic_suggestion_job(
             return existing, False
         job_id = uuid4()
         cursor.execute(
-            """INSERT INTO intake.semantic_suggestion_jobs(
+            f"""INSERT INTO intake.semantic_suggestion_jobs(
                    id,project_id,revision_id,source_asset_id,provider,model,input_fingerprint,state,total_count)
-               VALUES (%s,%s,%s,%s,%s,%s,%s,'queued',%s) RETURNING *""",
+               VALUES (%s,%s,%s,%s,%s,%s,%s,'queued',%s) RETURNING {JOB_VIEW_COLUMNS}""",
             (job_id, project_id, scope["revision_id"], source_asset_id, PROVIDER, MODEL, fingerprint, scope["layer_count"]),
         )
         return cursor.fetchone(), True
@@ -79,8 +81,7 @@ def create_semantic_suggestion_job(
 def get_semantic_suggestion_job(database_url: str, project_id: UUID, job_id: UUID) -> dict[str, Any] | None:
     with _connect(database_url) as connection, connection.cursor() as cursor:
         cursor.execute(
-            """SELECT id,source_asset_id,provider,model,state,total_count,completed_count,failed_count,
-                      error_summary,started_at,heartbeat_at,finished_at,created_at
+            f"""SELECT {JOB_VIEW_COLUMNS}
                FROM intake.semantic_suggestion_jobs WHERE project_id=%s AND id=%s""",
             (project_id, job_id),
         )

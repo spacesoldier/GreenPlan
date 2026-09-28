@@ -1,4 +1,4 @@
-import type { CadLayer, IntakeFile } from "./contracts";
+import type { CadLayer, CadXrefDependency, IntakeFile } from "./contracts";
 
 export type DeliveryTreeNode = {
   id: string;
@@ -6,6 +6,15 @@ export type DeliveryTreeNode = {
   kind: "folder" | "file";
   file?: IntakeFile;
   children: DeliveryTreeNode[];
+};
+
+export type CadDocumentTreeNode = {
+  assetId: string;
+  path: string;
+  via: CadXrefDependency | null;
+  children: CadDocumentTreeNode[];
+  unresolved: CadXrefDependency[];
+  cycle: boolean;
 };
 
 export function buildDeliveryTree(files: IntakeFile[]): DeliveryTreeNode[] {
@@ -54,15 +63,62 @@ export function clampTrayHeight(value: number, viewportHeight: number): number {
   return Math.round(Math.min(Math.max(value, 180), Math.max(180, viewportHeight * 0.75)));
 }
 
+export function clampDockSplit(value: number, viewportWidth: number): number {
+  return Math.round(Math.min(Math.max(value, 280), Math.max(280, viewportWidth - 360)));
+}
+
+export function clampTreeWidth(value: number, viewportWidth: number): number {
+  return Math.round(Math.min(Math.max(value, 300), Math.max(300, viewportWidth * 0.46)));
+}
+
+export function buildCadDependencyForest(
+  documents: Array<[string, string]>,
+  dependencies: CadXrefDependency[],
+): CadDocumentTreeNode[] {
+  const paths = new Map(documents);
+  const outgoing = new Map<string, CadXrefDependency[]>();
+  const incoming = new Set<string>();
+  for (const dependency of dependencies) {
+    const values = outgoing.get(dependency.source_asset_id) || [];
+    values.push(dependency);
+    outgoing.set(dependency.source_asset_id, values);
+    if (dependency.referenced_asset_id && paths.has(dependency.referenced_asset_id)) incoming.add(dependency.referenced_asset_id);
+  }
+  const sortEdges = (edges: CadXrefDependency[]) => [...edges].sort((left, right) => left.reference_name.localeCompare(right.reference_name));
+  const visit = (assetId: string, via: CadXrefDependency | null, ancestors: Set<string>): CadDocumentTreeNode => {
+    const cycle = ancestors.has(assetId);
+    const path = paths.get(assetId) || via?.target_relative_path || assetId;
+    if (cycle) return { assetId, path, via, children: [], unresolved: [], cycle: true };
+    const nextAncestors = new Set(ancestors).add(assetId);
+    const edges = sortEdges(outgoing.get(assetId) || []);
+    return {
+      assetId, path, via,
+      children: edges.filter((edge) => edge.referenced_asset_id && paths.has(edge.referenced_asset_id))
+        .map((edge) => visit(edge.referenced_asset_id!, edge, nextAncestors)),
+      unresolved: edges.filter((edge) => !edge.referenced_asset_id || !paths.has(edge.referenced_asset_id)),
+      cycle: false,
+    };
+  };
+  const forest = documents.filter(([assetId]) => !incoming.has(assetId))
+    .map(([assetId]) => visit(assetId, null, new Set()));
+  const represented = new Set<string>();
+  const collect = (node: CadDocumentTreeNode) => { represented.add(node.assetId); node.children.forEach(collect); };
+  forest.forEach(collect);
+  for (const [assetId] of documents) if (!represented.has(assetId)) forest.push(visit(assetId, null, new Set()));
+  return forest;
+}
+
 export function wizardStepStates(input: {
   fileCount: number;
   cadCount: number;
+  cadAnalyzed: boolean;
   openFindings: number;
+  reviewAccepted: boolean;
   published: boolean;
 }): Array<"complete" | "current" | "upcoming"> {
   const materialDone = input.fileCount > 0;
-  const cadDone = input.cadCount > 0;
-  const reviewDone = cadDone && input.openFindings === 0;
+  const cadDone = input.cadCount > 0 && input.cadAnalyzed;
+  const reviewDone = cadDone && input.reviewAccepted;
   if (input.published) return ["complete", "complete", "complete", "complete"];
   return [
     materialDone ? "complete" : "current",

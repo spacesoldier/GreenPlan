@@ -62,3 +62,13 @@
 UI/backend vertical slice и regression tests переводят итерацию в `Verification`. `Complete`
 требует реального прогона local Laya по двум пилотам, размеченной выборки не менее 100 слоёв и
 отчёта accuracy/calibration/latency/RAM. До этого кнопка и suggestions помечены experimental.
+
+
+## Implementation checkpoint — readable XREF workbench
+
+- command bar объединяет компактное название проекта и четыре крупных этапа; active selection отделён от progress state;
+- дерево поставки остаётся физической структурой загруженной директории; CAD-граф является отдельной логической проекцией направленных XREF edges;
+- реальные данные «Старого Гая»: 13 DWG, 414 слоёв, resolved и missing XREF показаны разными ветками;
+- ширина project tree, ширина списка bottom tray и высота tray регулируются pointer drag и сохраняются локально;
+- semantic start API возвращает только публичные поля job: smoke test вернул 202, задача Laya завершила 36/36 слоёв;
+- web regression: 48 tests, typecheck и production build; API regression: 56 tests.
