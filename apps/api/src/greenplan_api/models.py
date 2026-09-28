@@ -198,6 +198,8 @@ class IntakeFile(ApiModel):
     role: str | None = None
     detected_format: str | None = None
     format_version: str | None = None
+    source_modified_at: datetime | None = None
+    uploaded_at: datetime
 
 
 class IntakeStage(ApiModel):
@@ -343,6 +345,10 @@ class ClassificationBatchReviewRequest(ApiModel):
 class FindingResolutionRequest(ApiModel):
     action: Literal["waive", "reopen", "block"]
     reason: str = Field(min_length=3, max_length=2000)
+
+
+class XrefResolutionRequest(ApiModel):
+    target_asset_id: UUID
 
 
 class SemanticSuggestionRequest(ApiModel):

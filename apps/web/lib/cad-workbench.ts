@@ -2,6 +2,7 @@ import type { CadLayer, CadXrefDependency, IntakeFile } from "./contracts";
 
 export type DeliveryTreeNode = {
   id: string;
+  relativePath: string;
   label: string;
   kind: "folder" | "file";
   file?: IntakeFile;
@@ -17,8 +18,79 @@ export type CadDocumentTreeNode = {
   cycle: boolean;
 };
 
+export type CadWorkspaceKind = "project_solution" | "source_data" | "archive" | "survey" | "other";
+
+export type CadWorkspaceRoot = {
+  kind: CadWorkspaceKind;
+  label: string;
+  nodes: CadDocumentTreeNode[];
+};
+
+export type XrefCandidateOption = {
+  path: string;
+  file: IntakeFile | undefined;
+  kind: CadWorkspaceKind;
+  compatible: boolean;
+  recommended: boolean;
+  recommendationReason: string | null;
+};
+
+const workspaceLabels: Record<CadWorkspaceKind, string> = {
+  project_solution: "Проектное решение",
+  source_data: "Исходные данные",
+  archive: "Архивы",
+  survey: "Обследования и ведомости",
+  other: "Прочие CAD-материалы",
+};
+
+export function cadWorkspaceKind(path: string): CadWorkspaceKind {
+  const parts = path.replaceAll("\\", "/").split("/").slice(0, -1).map((part) => part.toLocaleLowerCase().replaceAll("ё", "е"));
+  if (parts.some((part) => /архив|archive/.test(part))) return "archive";
+  if (parts.some((part) => /проектн|решени|project/.test(part))) return "project_solution";
+  if (parts.some((part) => /исходн|source/.test(part))) return "source_data";
+  if (parts.some((part) => /обслед|ведомост|инвентар/.test(part))) return "survey";
+  return "other";
+}
+
+export function xrefCandidateOptions(
+  xref: CadXrefDependency,
+  files: IntakeFile[],
+): XrefCandidateOption[] {
+  const sourceKind = cadWorkspaceKind(xref.source_relative_path);
+  const options: XrefCandidateOption[] = xref.matches.map((path) => {
+    const kind = cadWorkspaceKind(path);
+    return {
+      path,
+      file: files.find((item) => item.relative_path === path),
+      kind,
+      compatible: sourceKind !== "archive" || kind === "archive",
+      recommended: false,
+      recommendationReason: null,
+    };
+  });
+  const compatible = options.filter((item) => item.compatible && item.file);
+  const sameKind = compatible.filter((item) => item.kind === sourceKind);
+  const preferred = sameKind.length ? sameKind : compatible;
+  if (preferred.length === 1) {
+    preferred[0].recommended = true;
+    preferred[0].recommendationReason = sameKind.length ? "та же смысловая ветка" : "единственный допустимый кандидат";
+    return options;
+  }
+  if (preferred.length > 1 && preferred.every((item) => item.file?.size_bytes === preferred[0].file?.size_bytes)) {
+    const dated = preferred.filter((item) => item.file?.source_modified_at);
+    if (dated.length === preferred.length) {
+      const ordered = [...dated].sort((left, right) => Date.parse(right.file!.source_modified_at!) - Date.parse(left.file!.source_modified_at!));
+      if (Date.parse(ordered[0].file!.source_modified_at!) > Date.parse(ordered[1].file!.source_modified_at!)) {
+        ordered[0].recommended = true;
+        ordered[0].recommendationReason = "одинаковый размер, наиболее свежая дата файла";
+      }
+    }
+  }
+  return options;
+}
+
 export function buildDeliveryTree(files: IntakeFile[]): DeliveryTreeNode[] {
-  const root: DeliveryTreeNode = { id: "root", label: "root", kind: "folder", children: [] };
+  const root: DeliveryTreeNode = { id: "root", relativePath: "", label: "root", kind: "folder", children: [] };
   for (const file of [...files].sort((a, b) => a.relative_path.localeCompare(b.relative_path))) {
     const parts = file.relative_path.split("/").filter(Boolean);
     let parent = root;
@@ -27,7 +99,7 @@ export function buildDeliveryTree(files: IntakeFile[]): DeliveryTreeNode[] {
       const id = `${parent.id}/${part}`;
       let child = parent.children.find((item) => item.id === id);
       if (!child) {
-        child = { id, label: part, kind: isFile ? "file" : "folder", file: isFile ? file : undefined, children: [] };
+        child = { id, relativePath: parts.slice(0, index + 1).join("/"), label: part, kind: isFile ? "file" : "folder", file: isFile ? file : undefined, children: [] };
         parent.children.push(child);
       }
       parent = child;
@@ -106,6 +178,24 @@ export function buildCadDependencyForest(
   forest.forEach(collect);
   for (const [assetId] of documents) if (!represented.has(assetId)) forest.push(visit(assetId, null, new Set()));
   return forest;
+}
+
+export function buildCadWorkspaceRoots(
+  documents: Array<[string, string]>,
+  dependencies: CadXrefDependency[],
+): CadWorkspaceRoot[] {
+  const groups = new Map<CadWorkspaceKind, CadDocumentTreeNode[]>();
+  for (const node of buildCadDependencyForest(documents, dependencies)) {
+    const kind = cadWorkspaceKind(node.path);
+    const values = groups.get(kind) || [];
+    values.push(node);
+    groups.set(kind, values);
+  }
+  const order: CadWorkspaceKind[] = ["project_solution", "source_data", "survey", "archive", "other"];
+  return order.filter((kind) => groups.has(kind)).map((kind) => ({
+    kind, label: workspaceLabels[kind],
+    nodes: (groups.get(kind) || []).sort((left, right) => left.path.localeCompare(right.path)),
+  }));
 }
 
 export function wizardStepStates(input: {

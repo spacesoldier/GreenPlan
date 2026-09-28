@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildCadDependencyForest, buildDeliveryTree, clampDockSplit, clampTrayHeight, clampTreeWidth, groupLayerFamilies, normalizedLayerName, wizardStepStates } from "./cad-workbench";
+import { buildCadDependencyForest, buildCadWorkspaceRoots, buildDeliveryTree, cadWorkspaceKind, clampDockSplit, clampTrayHeight, clampTreeWidth, groupLayerFamilies, normalizedLayerName, wizardStepStates, xrefCandidateOptions } from "./cad-workbench";
 import type { CadLayer, CadXrefDependency, IntakeFile } from "./contracts";
 
 describe("CAD workbench projections", () => {
@@ -10,8 +10,10 @@ describe("CAD workbench projections", () => {
     ] as IntakeFile[];
     const tree = buildDeliveryTree(files);
     expect(tree[0].label).toBe("Проект");
+    expect(tree[0].relativePath).toBe("Проект");
     expect(tree[0].children.map((item) => item.label)).toEqual(["XREF", "head.dwg"]);
     expect(tree[0].children[0].children[0].file?.id).toBe("2");
+    expect(tree[0].children[0].relativePath).toBe("Проект/XREF");
   });
 
   it("groups only normalized names with the same entity signature", () => {
@@ -60,5 +62,26 @@ describe("CAD workbench projections", () => {
       .toEqual(["complete", "complete", "current", "upcoming"]);
     expect(wizardStepStates({ fileCount: 12, cadCount: 4, cadAnalyzed: true, openFindings: 0, reviewAccepted: true, published: true }))
       .toEqual(["complete", "complete", "complete", "complete"]);
+  });
+  it("classifies semantic workspace roots from directory names", () => {
+    expect(cadWorkspaceKind("Проектное решение/DWG/head.dwg")).toBe("project_solution");
+    expect(cadWorkspaceKind("Исходные данные/base.dwg")).toBe("source_data");
+    expect(cadWorkspaceKind("Архив/old.dwg")).toBe("archive");
+  });
+
+  it("builds semantic roots and repeats a shared target below both parents", () => {
+    const dependencies = [{ id: "e1", source_asset_id: "a", referenced_asset_id: "shared", reference_name: "shared" }, { id: "e2", source_asset_id: "b", referenced_asset_id: "shared", reference_name: "shared" }] as CadXrefDependency[];
+    const roots = buildCadWorkspaceRoots([["a", "Проектное решение/a.dwg"], ["b", "Проектное решение/b.dwg"], ["shared", "Исходные данные/shared.dwg"]], dependencies);
+    expect(roots).toHaveLength(1);
+    expect(roots[0].kind).toBe("project_solution");
+    expect(roots[0].nodes.map((node) => node.children[0].assetId)).toEqual(["shared", "shared"]);
+  });
+
+  it("never offers a non-archive target to an archive source", () => {
+    const xref = { source_relative_path: "Архив/head.dwg", matches: ["Архив/base.dwg", "Проектное решение/base.dwg"] } as CadXrefDependency;
+    const files = [{ id: "archive", relative_path: "Архив/base.dwg", size_bytes: 10, source_modified_at: "2026-01-02T00:00:00Z", uploaded_at: "2026-01-03T00:00:00Z" }, { id: "project", relative_path: "Проектное решение/base.dwg", size_bytes: 10, source_modified_at: "2026-01-04T00:00:00Z", uploaded_at: "2026-01-05T00:00:00Z" }] as IntakeFile[];
+    const options = xrefCandidateOptions(xref, files);
+    expect(options.find((item) => item.file?.id === "archive")).toMatchObject({ compatible: true, recommended: true });
+    expect(options.find((item) => item.file?.id === "project")).toMatchObject({ compatible: false, recommended: false });
   });
 });

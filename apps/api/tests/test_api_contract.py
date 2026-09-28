@@ -46,10 +46,18 @@ def test_openapi_exposes_project_soft_delete(client):
     assert "delete" in response.json()["paths"]["/v1/intake/projects/{project_id}"]
 
 
+def test_openapi_exposes_delivery_path_delete(client):
+    response = client.get("/openapi.json")
+
+    operation = response.json()["paths"]["/v1/intake/projects/{project_id}/files"]["delete"]
+    assert any(item["name"] == "relative_path" and item["in"] == "query" for item in operation["parameters"])
+
+
 def test_openapi_exposes_cad_workbench_review_operations(client):
     paths = client.get("/openapi.json").json()["paths"]
     assert "post" in paths["/v1/intake/projects/{project_id}/classifications/batch-review"]
     assert "post" in paths["/v1/intake/projects/{project_id}/findings/{finding_id}/resolve"]
+    assert "post" in paths["/v1/intake/projects/{project_id}/xrefs/{xref_id}/resolve"]
 
 
 def test_openapi_exposes_background_semantic_suggestions(client):

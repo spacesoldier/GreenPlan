@@ -1,12 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState, type CSSProperties, type InputHTMLAttributes, type PointerEvent as ReactPointerEvent } from "react";
+import { useCallback, useEffect, useState, type CSSProperties, type InputHTMLAttributes, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
 
-import type { IntakeProjectDetail } from "@/lib/contracts";
+import type { CadXrefDependency, IntakeFile, IntakeProjectDetail } from "@/lib/contracts";
 import { domainJson, formatBytes } from "@/lib/domain-client";
 import { inspectFolderSelection, isSupportedProjectFile, partitionProjectFiles, relativeUploadPath } from "@/lib/folder-selection";
-import { buildCadDependencyForest, buildDeliveryTree, clampDockSplit, clampTrayHeight, clampTreeWidth, groupLayerFamilies, wizardStepStates, type CadDocumentTreeNode, type DeliveryTreeNode } from "@/lib/cad-workbench";
+import { buildCadWorkspaceRoots, buildDeliveryTree, clampDockSplit, clampTrayHeight, clampTreeWidth, groupLayerFamilies, wizardStepStates, xrefCandidateOptions, type CadDocumentTreeNode, type DeliveryTreeNode } from "@/lib/cad-workbench";
 
 const stateLabels: Record<string, string> = {
   draft: "Черновик", receiving: "Приём файлов", analyzing: "Анализ",
@@ -28,13 +28,38 @@ const stageLabels: Record<string, string> = {
   fidelity_check: "Проверка полноты", classification: "Классификация",
 };
 
-function DeliveryNodes({ nodes }: { nodes: DeliveryTreeNode[] }) {
+function DeliveryNodes({ nodes, onContextMenu }: { nodes: DeliveryTreeNode[]; onContextMenu: (event: ReactMouseEvent, node: DeliveryTreeNode) => void }) {
   return <>{nodes.map((node) => node.kind === "folder"
-    ? <details className="wb-tree-folder" key={node.id} open><summary><span>⌄</span>{node.label}<small>{node.children.length}</small></summary><div><DeliveryNodes nodes={node.children} /></div></details>
-    : <button className="wb-tree-file" key={node.id}><span>{node.label.toLocaleLowerCase().endsWith(".dwg") ? "DWG" : node.label.split(".").pop()?.toUpperCase()}</span><b>{node.label}</b></button>)}</>;
+    ? <details className="wb-tree-folder" key={node.id} open><summary onContextMenu={(event) => onContextMenu(event, node)}><span>⌄</span>{node.label}<small>{node.children.length}</small></summary><div><DeliveryNodes nodes={node.children} onContextMenu={onContextMenu} /></div></details>
+    : <button className="wb-tree-file" key={node.id} onContextMenu={(event) => onContextMenu(event, node)}><span>{node.label.toLocaleLowerCase().endsWith(".dwg") ? "DWG" : node.label.split(".").pop()?.toUpperCase()}</span><b>{node.label}</b></button>)}</>;
 }
 
 type SelectedCadNode = { kind: "document" | "space" | "layer" | "xref"; id: string };
+function XrefResolutionChoices({ xref, files, value, busy, onChange, onResolve }: {
+  xref: CadXrefDependency; files: IntakeFile[]; value: string; busy: boolean;
+  onChange: (assetId: string) => void; onResolve: () => void;
+}) {
+  const candidates = xrefCandidateOptions(xref, files);
+  const kindLabels = {
+    project_solution: "Проектное решение", source_data: "Исходные данные", archive: "Архив",
+    survey: "Обследования", other: "Прочее",
+  };
+  return <section className="xref-resolution-control">
+    <header><span>Неоднозначная внешняя ссылка</span><strong>{xref.reference_name}</strong><small>Для чертежа: {xref.source_relative_path}</small></header>
+    <p>Выберите, какую найденную копию подключить к этой конкретной XREF. Система не выбирает файл автоматически.</p>
+    <div>{candidates.map(({ path, file, kind, compatible, recommended, recommendationReason }) => {
+      const sourceDate = file?.source_modified_at ? new Date(file.source_modified_at).toLocaleString("ru-RU") : null;
+      const uploadDate = file?.uploaded_at ? new Date(file.uploaded_at).toLocaleString("ru-RU") : null;
+      const className = [file?.id === value ? "selected" : "", recommended ? "recommended" : "", compatible ? "" : "incompatible"].filter(Boolean).join(" ");
+      return <label key={path} className={className}>
+        <input type="radio" name={`xref-${xref.id}`} value={file?.id || ""} disabled={!file || !compatible} checked={file?.id === value} onChange={() => file && compatible && onChange(file.id)} />
+        <span><strong>{path}</strong><small>{kindLabels[kind]} · {file ? `${formatBytes(file.size_bytes)} · SHA ${file.sha256.slice(0, 12)}` : "кандидат отсутствует в текущей поставке"}</small><small>{sourceDate ? `Изменён в источнике: ${sourceDate}` : uploadDate ? `Дата исходника неизвестна · загружен: ${uploadDate}` : "Дата неизвестна"}</small>{!compatible && <em>Недопустим: архивный чертёж может ссылаться только на архивную ветку</em>}{recommended && <em>Рекомендация: {recommendationReason}</em>}</span>
+      </label>;
+    })}</div>
+    <button className="action-primary" disabled={!value || busy} onClick={onResolve}>Использовать выбранный файл</button>
+  </section>;
+}
+
 
 function CadDependencyNodes({ nodes, project, layerDocument, selectedCadNode, onDocument, onSpace, onLayer, onXref }: {
   nodes: CadDocumentTreeNode[];
@@ -57,7 +82,7 @@ function CadDependencyNodes({ nodes, project, layerDocument, selectedCadNode, on
         {!node.cycle && (node.assetId === layerDocument || !node.via) && <>
           <div className="cad-tree-group"><em>Листы</em>{spaces.map((space) => <button className={selectedCadNode.kind === "space" && selectedCadNode.id === space.id ? "selected" : ""} key={space.id} onClick={() => onSpace(node.assetId, space.id)}><span>{space.space_kind === "model" ? "M" : "Л"}</span><b>{space.name}</b><small>{space.entity_count}</small></button>)}</div>
           <details className="cad-tree-subtree"><summary><b>Слои</b><small>{layers.length}</small></summary><div className="cad-tree-layers">{layers.map((layer) => <button className={selectedCadNode.kind === "layer" && selectedCadNode.id === layer.id ? "selected" : ""} key={layer.id} onClick={() => onLayer(node.assetId, layer.id)}><span>≡</span><b>{layer.name}</b><small>{layer.suggested_category}</small></button>)}</div></details>
-          {node.unresolved.length > 0 && <div className="cad-tree-group cad-missing-refs"><em>Неразрешённые XREF</em>{node.unresolved.map((xref) => <button className={`ref-${xref.status} ${selectedCadNode.kind === "xref" && selectedCadNode.id === xref.id ? "selected" : ""}`} key={xref.id} title={xref.original_path || ""} onClick={() => onXref(node.assetId, xref.id)}><span>?</span><b>{xref.reference_name}</b><small>{xref.status}</small></button>)}</div>}
+          {node.unresolved.length > 0 && <div className="cad-tree-group cad-missing-refs"><em>Неразрешённые XREF</em>{node.unresolved.map((xref) => <button className={`ref-${xref.status} ${selectedCadNode.kind === "xref" && selectedCadNode.id === xref.id ? "selected" : ""}`} key={xref.id} title={xref.original_path || ""} onClick={() => onXref(node.assetId, xref.id)}><span>?</span><b>{xref.reference_name}</b><small>{xref.status === "ambiguous" ? <>неоднозначно · {xref.matches.length} вариантов</> : xref.status === "missing" ? "файл не найден" : xref.status}</small></button>)}</div>}
           {node.children.length > 0 && <div className="cad-xref-children"><em>Подключённые DWG</em><CadDependencyNodes nodes={node.children} project={project} layerDocument={layerDocument} selectedCadNode={selectedCadNode} onDocument={onDocument} onSpace={onSpace} onLayer={onLayer} onXref={onXref} /></div>}
         </>}
       </details>
@@ -90,13 +115,19 @@ export function ProjectIntake({ projectId }: { projectId: string }) {
   const [uploadNote, setUploadNote] = useState("");
   const [liveUpload, setLiveUpload] = useState<{ state: string; title: string; detail: string; at: string } | null>(null);
   const [error, setError] = useState("");
+  const [xrefTargetId, setXrefTargetId] = useState("");
+  const [deliveryMenu, setDeliveryMenu] = useState<{ x: number; y: number; node: DeliveryTreeNode } | null>(null);
 
   const load = useCallback(async () => {
     const next = await domainJson<IntakeProjectDetail>(`/v1/intake/projects/${projectId}`);
     setProject(next);
-    setSelectedMaster((current) => current || next.master_candidates.find((item) => item.selected)?.source_asset_id || next.master_candidates[0]?.source_asset_id || "");
-    setLayerDocument((current) => current || next.master_candidates[0]?.source_asset_id || next.cad_layers[0]?.source_asset_id || "");
-    setSelectedCadNode((current) => current.id ? current : { kind: "document", id: next.master_candidates[0]?.source_asset_id || next.cad_layers[0]?.source_asset_id || "" });
+    const cadFiles = next.files.filter((file) => ["dwg", "dxf"].includes(file.detected_format || file.relative_path.split(".").at(-1)?.toLocaleLowerCase() || ""));
+    const cadAssetIds = new Set(cadFiles.map((item) => item.id));
+    next.cad_layers.forEach((item) => cadAssetIds.add(item.source_asset_id));
+    const fallbackDocument = next.master_candidates[0]?.source_asset_id || next.cad_layers[0]?.source_asset_id || cadFiles[0]?.id || "";
+    setSelectedMaster((current) => next.master_candidates.some((item) => item.source_asset_id === current) ? current : next.master_candidates.find((item) => item.selected)?.source_asset_id || next.master_candidates[0]?.source_asset_id || "");
+    setLayerDocument((current) => cadAssetIds.has(current) ? current : fallbackDocument);
+    setSelectedCadNode((current) => current.kind === "document" && !cadAssetIds.has(current.id) ? { kind: "document", id: fallbackDocument } : current.id ? current : { kind: "document", id: fallbackDocument });
     return next;
   }, [projectId]);
 
@@ -111,6 +142,13 @@ export function ProjectIntake({ projectId }: { projectId: string }) {
     const timer = window.setInterval(() => load().catch(() => undefined), 1800);
     return () => window.clearInterval(timer);
   }, [load, project?.intake_state, project?.assistant_runs, project?.semantic_suggestion_jobs]);
+
+  useEffect(() => {
+    const close = () => setDeliveryMenu(null);
+    window.addEventListener("click", close);
+    window.addEventListener("blur", close);
+    return () => { window.removeEventListener("click", close); window.removeEventListener("blur", close); };
+  }, []);
 
   useEffect(() => {
     const saved = Number(window.localStorage.getItem("greenplan.intake.tray-height"));
@@ -200,6 +238,7 @@ export function ProjectIntake({ projectId }: { projectId: string }) {
         setLiveUpload({ state: "running", title: `Загрузка ${index + 1} из ${supported.length}`, detail: relativeUploadPath(current), at: new Date().toISOString() });
         const form = new FormData();
         form.set("relative_path", relativeUploadPath(current));
+        form.set("last_modified_ms", String(current.lastModified));
         form.set("file", current);
         await domainJson(`/v1/intake/projects/${projectId}/files`, { method: "POST", body: form });
         setUploadProgress([index + 1, supported.length]);
@@ -211,6 +250,32 @@ export function ProjectIntake({ projectId }: { projectId: string }) {
       setLiveUpload({ state: "failed", title: "Ошибка загрузки", detail: reason instanceof Error ? reason.message : "Операция прервана", at: new Date().toISOString() });
     } finally {
       setBusy(""); setUploadProgress(null);
+    }
+  }
+
+  function openDeliveryMenu(event: ReactMouseEvent, node: DeliveryTreeNode) {
+    event.preventDefault();
+    event.stopPropagation();
+    setDeliveryMenu({
+      node,
+      x: Math.min(event.clientX, window.innerWidth - 250),
+      y: Math.min(event.clientY, window.innerHeight - 110),
+    });
+  }
+
+  async function removeDeliveryNode(node: DeliveryTreeNode) {
+    setDeliveryMenu(null);
+    const subject = node.kind === "folder" ? `папку «${node.label}» и все вложенные файлы` : `файл «${node.label}»`;
+    if (!window.confirm(`Удалить ${subject} из проекта? Исходные файлы на вашем диске останутся без изменений.`)) return;
+    setBusy("delete-delivery-path"); setError("");
+    try {
+      await domainJson(`/v1/intake/projects/${projectId}/files?relative_path=${encodeURIComponent(node.relativePath)}`, { method: "DELETE" });
+      await load();
+      setLiveUpload({ state: "completed", title: "Материал исключён из проекта", detail: node.relativePath, at: new Date().toISOString() });
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Не удалось удалить материал из проекта");
+    } finally {
+      setBusy("");
     }
   }
 
@@ -236,6 +301,15 @@ export function ProjectIntake({ projectId }: { projectId: string }) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: actionName, reason: findingReason }),
     });
+  }
+
+  async function resolveSelectedXref(xref: CadXrefDependency) {
+    if (!xrefTargetId) return;
+    await action("resolve-xref", `/v1/intake/projects/${projectId}/xrefs/${xref.id}/resolve`, {
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ target_asset_id: xrefTargetId }),
+    });
+    setXrefTargetId("");
   }
 
   if (!project) return <main className="intake-loading"><span className="loader" /><strong>{error || "Открываем проект…"}</strong></main>;
@@ -279,7 +353,12 @@ export function ProjectIntake({ projectId }: { projectId: string }) {
       stdout: "", stderr: job.error_summary || "",
     })),
   ].sort((left, right) => Date.parse(right.at) - Date.parse(left.at)).slice(0, 40);
-  const layerDocuments = Array.from(new Map(project.cad_layers.map((layer) => [layer.source_asset_id, layer.source_relative_path])).entries());
+  const cadDocumentsById = new Map(project.files
+    .filter((file) => ["dwg", "dxf"].includes(file.detected_format || file.relative_path.split(".").at(-1)?.toLocaleLowerCase() || ""))
+    .map((file) => [file.id, file.relative_path]));
+  project.cad_layers.forEach((layer) => cadDocumentsById.set(layer.source_asset_id, layer.source_relative_path));
+  const layerDocuments = Array.from(cadDocumentsById.entries());
+  const cadWorkspaceRoots = buildCadWorkspaceRoots(layerDocuments, project.xref_dependencies);
   const selectedSpaces = project.cad_spaces.filter((space) => space.source_asset_id === layerDocument);
   const selectedLayers = project.cad_layers.filter((layer) => {
     if (layer.source_asset_id !== layerDocument) return false;
@@ -288,13 +367,17 @@ export function ProjectIntake({ projectId }: { projectId: string }) {
     return !layerQuery || layer.name.toLocaleLowerCase().includes(layerQuery.toLocaleLowerCase());
   });
   const deliveryTree = buildDeliveryTree(visibleFiles);
-  const cadDependencyForest = buildCadDependencyForest(layerDocuments, project.xref_dependencies);
   const layerFamilies = [...groupLayerFamilies(selectedLayers).entries()];
   const selectedFinding = project.findings.find((finding) => finding.id === selectedFindingId) || project.findings[0];
   const selectedFindingInventories = project.inventories.filter((item) => item.source_asset_id === selectedFinding?.source_asset_id);
   const selectedActivity = activityEvents.find((event) => event.id === selectedActivityId) || activityEvents[0];
   const selectedLayer = project.cad_layers.find((layer) => selectedCadNode.kind === "layer" && layer.id === selectedCadNode.id);
   const selectedXref = project.xref_dependencies.find((xref) => selectedCadNode.kind === "xref" && xref.id === selectedCadNode.id);
+  const findingXrefEvidence = selectedFinding?.evidence?.xref as { name?: string; path?: string } | undefined;
+  const selectedFindingXref = selectedFinding?.code === "xref_ambiguous"
+    ? project.xref_dependencies.find((xref) => xref.source_asset_id === selectedFinding.source_asset_id
+      && (xref.original_path === findingXrefEvidence?.path || xref.reference_name === findingXrefEvidence?.name))
+    : undefined;
   const selectedSpace = project.cad_spaces.find((space) => selectedCadNode.kind === "space" && space.id === selectedCadNode.id)
     || selectedSpaces[0];
   const semanticJob = project.semantic_suggestion_jobs?.find((job) => job.source_asset_id === layerDocument);
@@ -385,6 +468,7 @@ export function ProjectIntake({ projectId }: { projectId: string }) {
             <div className="space-tabs" role="tablist" aria-label="Листы документа">{selectedSpaces.map((space) => <button role="tab" aria-selected={selectedSpace?.id === space.id} className={selectedSpace?.id === space.id ? "active" : ""} key={space.id} onClick={() => setSelectedCadNode({ kind: "space", id: space.id })}><i>{space.space_kind === "model" ? "M" : "Л"}</i><span>{space.name}</span><small>{space.entity_count.toLocaleString("ru-RU")}</small></button>)}{!selectedSpaces.length && <p className="empty-line">Пространства документа не найдены.</p>}</div>
             {selectedSpace && <p className="space-scope-note">Показаны слои документа для вкладки «{selectedSpace.name}». Точная видимость по viewport появится после нормализации per-space layer states.</p>}
             {selectedXref && <section className="selected-object-card"><span>XREF · {selectedXref.status}</span><h3>{selectedXref.reference_name}</h3><code>{selectedXref.original_path || "Путь не записан"}</code><p>{selectedXref.target_relative_path ? `Цель: ${selectedXref.target_relative_path}` : selectedXref.matches.length ? `Кандидаты: ${selectedXref.matches.join(", ")}` : "Файл не найден в текущей поставке."}</p>{selectedXref.referenced_asset_id && <button onClick={() => selectDocument(selectedXref.referenced_asset_id!)}>Перейти к целевому документу</button>}</section>}
+            {selectedXref?.status === "ambiguous" && <XrefResolutionChoices xref={selectedXref} files={project.files} value={xrefTargetId} busy={!!busy} onChange={setXrefTargetId} onResolve={() => resolveSelectedXref(selectedXref)} />}
             {selectedLayer && <section className="selected-object-card"><span>Слой · {selectedLayer.method}</span><h3>{selectedLayer.name}</h3><p>{selectedLayer.entity_count.toLocaleString("ru-RU")} объектов · подсказка <b>{selectedLayer.suggested_category}</b> · {Math.round((selectedLayer.confidence || 0) * 100)}%</p><div className="entity-tags">{Object.entries(selectedLayer.entity_types).map(([kind, count]) => <span key={kind}>{kind} <b>{count}</b></span>)}</div></section>}
             <div className="layer-toolbar"><label><span>Поиск слоя</span><input value={layerQuery} onChange={(event) => setLayerQuery(event.target.value)} placeholder="деревья, кабель…" /></label><div className="layer-modes"><button className={layerMode === "unknown" ? "active" : ""} onClick={() => setLayerMode("unknown")}>Не разобраны</button><button className={layerMode === "all" ? "active" : ""} onClick={() => setLayerMode("all")}>Все</button><button className={layerMode === "reviewed" ? "active" : ""} onClick={() => setLayerMode("reviewed")}>Проверены</button></div></div>
             <div className="bulk-review-bar"><span>Выбрано: <b>{selectedLayerIds.length}</b></span><select value={bulkCategory} onChange={(event) => setBulkCategory(event.target.value)}><option value="utility.unknown">Инженерные сети</option><option value="transport.road">Дороги и проезды</option><option value="surface.lawn">Покрытия и газоны</option><option value="vegetation.existing">Существующая растительность</option><option value="vegetation.proposed">Проектируемая растительность</option><option value="structure.building">Здания и сооружения</option><option value="terrain">Рельеф</option><option value="territory.work_boundary">Границы и зоны</option><option value="not_applicable">Служебное / неприменимо</option><option value="unknown">Не определено</option></select><button disabled={!selectedLayerIds.length || !!busy} onClick={() => reviewSelectedLayers("reject")}>Отклонить</button><button className="action-primary" disabled={!selectedLayerIds.length || !!busy} onClick={() => reviewSelectedLayers("accept")}>Назначить категорию</button></div>
@@ -409,8 +493,8 @@ export function ProjectIntake({ projectId }: { projectId: string }) {
         </div>
 
         <aside className="intake-aside wb-tree-pane">
-          {workbenchView === "materials" && <article className="intake-card"><h3>Дерево поставки</h3><div className="delivery-tree"><DeliveryNodes nodes={deliveryTree} /></div></article>}
-          {workbenchView === "explorer" && <article className="intake-card cad-tree-card"><header><div><span>Структура проекта</span><h3>CAD-граф</h3></div><small>Корневые DWG и подключённые XREF</small></header><div className="cad-nav-tree"><CadDependencyNodes nodes={cadDependencyForest} project={project} layerDocument={layerDocument} selectedCadNode={selectedCadNode} onDocument={selectDocument} onSpace={(assetId, id) => { setLayerDocument(assetId); setSelectedCadNode({ kind: "space", id }); }} onLayer={(assetId, id) => { setLayerDocument(assetId); setSelectedCadNode({ kind: "layer", id }); }} onXref={(assetId, id) => { setLayerDocument(assetId); setSelectedCadNode({ kind: "xref", id }); }} /></div></article>}
+          {workbenchView === "materials" && <article className="intake-card"><h3>Дерево поставки</h3><div className="delivery-tree"><DeliveryNodes nodes={deliveryTree} onContextMenu={openDeliveryMenu} /></div></article>}
+          {workbenchView === "explorer" && <article className="intake-card cad-tree-card"><header><div><span>Структура проекта</span><h3>CAD-граф</h3></div><small>Смысловые корни и подключённые XREF</small></header><div className="cad-nav-tree">{cadWorkspaceRoots.map((root) => <section className={`cad-workspace-root root-${root.kind}`} key={root.kind}><header><strong>{root.label}</strong><small>{root.nodes.length} корневых</small></header><CadDependencyNodes nodes={root.nodes} project={project} layerDocument={layerDocument} selectedCadNode={selectedCadNode} onDocument={selectDocument} onSpace={(assetId, id) => { setLayerDocument(assetId); setSelectedCadNode({ kind: "space", id }); }} onLayer={(assetId, id) => { setLayerDocument(assetId); setSelectedCadNode({ kind: "layer", id }); }} onXref={(assetId, id) => { setXrefTargetId(""); setLayerDocument(assetId); setSelectedCadNode({ kind: "xref", id }); }} /></section>)}</div></article>}
           {workbenchView === "publish" && <article className="intake-card"><h3>Контроль качества</h3><div className="quality-metrics"><div><strong>{project.cad_count}</strong><span>CAD-файлов</span></div><div><strong>{project.finding_count}</strong><span>наблюдений</span></div><div className={project.critical_count ? "danger" : ""}><strong>{project.critical_count}</strong><span>критических</span></div></div><p className="verdict">Вердикт <b>{project.fidelity_verdict?.replaceAll("_", " ") || "ещё не сформирован"}</b></p></article>}
         </aside>
         <button className="workbench-column-resizer" aria-label="Изменить ширину дерева проекта" title="Потяните, чтобы изменить ширину дерева" onPointerDown={beginTreeResize} />
@@ -419,8 +503,9 @@ export function ProjectIntake({ projectId }: { projectId: string }) {
         {dockExpanded && <button className="activity-dock-resizer" aria-label="Изменить высоту нижней панели" onPointerDown={beginDockResize} />}
         <header className="activity-dock-tabs"><i className={assistantActive || semanticActive || busy === "upload" ? "is-live" : ""} /><button className={dockTab === "issues" ? "active" : ""} onClick={() => { setDockTab("issues"); setDockExpanded(true); }}>Проблемы <em>{openFindingCount}</em></button><button className={dockTab === "activity" ? "active" : ""} onClick={() => { setDockTab("activity"); setDockExpanded(true); }}>Журнал действий <em>{activityEvents.length}</em></button><span>{dockTab === "activity" ? selectedActivity?.title || "Событий пока нет" : selectedFinding?.title || "Проблем нет"}</span><button className="dock-collapse" onClick={() => setDockExpanded((value) => !value)}>{dockExpanded ? "⌄" : "⌃"}</button></header>
         {dockExpanded && dockTab === "activity" && <div className="activity-dock-body"><div className="activity-stream">{activityEvents.map((event) => <button className={`activity-event activity-${event.state} ${event.id === selectedActivity?.id ? "selected" : ""}`} key={event.id} onClick={() => setSelectedActivityId(event.id)}><i /><time>{new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(event.at))}</time><div><strong>{event.title}</strong><small>{event.detail}</small></div></button>)}</div><button className="dock-column-resizer" aria-label="Изменить ширину списка журнала" onPointerDown={beginDockSplitResize} /><aside>{selectedActivity ? <><span>{selectedActivity.state}</span><h3>{selectedActivity.title}</h3><p>{selectedActivity.detail}</p><dl><div><dt>Время</dt><dd>{new Date(selectedActivity.at).toLocaleString("ru-RU")}</dd></div><div><dt>ID события</dt><dd>{selectedActivity.id}</dd></div></dl><details open><summary>Метрики</summary><pre>{JSON.stringify(selectedActivity.metrics, null, 2)}</pre></details>{(selectedActivity.stderr || selectedActivity.stdout) && <details><summary>Технический вывод</summary><pre>{selectedActivity.stderr || selectedActivity.stdout}</pre></details>}<p className="activity-hint">Artifact locator показан в описании завершённой конвертации.</p></> : <p>Выберите событие.</p>}</aside></div>}
-        {dockExpanded && dockTab === "issues" && <div className="tray-issues issue-split"><div className="issue-queue">{project.findings.map((finding) => <button className={`${finding.id === selectedFinding?.id ? "active" : ""} issue-${finding.severity}`} key={finding.id} onClick={() => setSelectedFindingId(finding.id)}><i /><span><strong>{finding.title}</strong><small>{finding.code} · {finding.status}</small></span></button>)}</div><button className="dock-column-resizer" aria-label="Изменить ширину списка проблем" onPointerDown={beginDockSplitResize} />{selectedFinding ? <section className="issue-detail"><header><span>{selectedFinding.severity}</span><h3>{selectedFinding.title}</h3><p>{selectedFinding.detail}</p></header><dl><div><dt>Этап</dt><dd>{selectedFinding.stage}</dd></div><div><dt>Код</dt><dd>{selectedFinding.code}</dd></div><div><dt>Статус</dt><dd>{selectedFinding.status}</dd></div></dl>{selectedFindingInventories.length > 0 && <div className="fidelity-comparison">{selectedFindingInventories.map((inventory) => <div key={inventory.id}><header><b>{inventory.stage}</b><span>{inventory.tool_name || inventory.format}</span></header><dl><div><dt>Объекты</dt><dd>{String(inventory.metrics.entity_count ?? "—")}</dd></div><div><dt>Слои</dt><dd>{String(inventory.metrics.layer_count ?? "—")}</dd></div><div><dt>Листы</dt><dd>{String(inventory.metrics.layout_count ?? "—")}</dd></div></dl>{inventory.artifact_locator && <code>{inventory.artifact_locator}</code>}</div>)}</div>}<details><summary>Evidence</summary><pre>{JSON.stringify(selectedFinding.evidence, null, 2)}</pre></details>{selectedFinding.resolution?.reason && <div className="issue-resolution"><b>{selectedFinding.resolution.action}</b><p>{selectedFinding.resolution.reason}</p></div>}<label className="issue-reason">Обоснование решения<textarea rows={2} value={findingReason} onChange={(event) => setFindingReason(event.target.value)} /></label><div className="issue-actions"><button disabled={!!busy} onClick={() => action("retry-search", `/v1/intake/projects/${projectId}/assistant-runs`)}>Повторить анализ</button><button onClick={() => resolveSelectedFinding("reopen")}>Вернуть</button><button className="reject-button" onClick={() => resolveSelectedFinding("block")}>Блокировать</button><button className="action-primary" onClick={() => resolveSelectedFinding("waive")}>Игнорировать в редакции</button></div></section> : <p className="empty-line">Проблем нет.</p>}</div>}
+        {dockExpanded && dockTab === "issues" && <div className="tray-issues issue-split"><div className="issue-queue">{project.findings.map((finding) => <button className={`${finding.id === selectedFinding?.id ? "active" : ""} issue-${finding.severity}`} key={finding.id} onClick={() => { setXrefTargetId(""); setSelectedFindingId(finding.id); }}><i /><span><strong>{finding.title}</strong><small>{finding.code} · {finding.status}</small></span></button>)}</div><button className="dock-column-resizer" aria-label="Изменить ширину списка проблем" onPointerDown={beginDockSplitResize} />{selectedFinding ? <section className="issue-detail"><header><span>{selectedFinding.severity}</span><h3>{selectedFinding.title}</h3><p>{selectedFinding.detail}</p></header><dl><div><dt>Этап</dt><dd>{selectedFinding.stage}</dd></div><div><dt>Код</dt><dd>{selectedFinding.code}</dd></div><div><dt>Статус</dt><dd>{selectedFinding.status}</dd></div></dl>{selectedFindingXref && <XrefResolutionChoices xref={selectedFindingXref} files={project.files} value={xrefTargetId} busy={!!busy} onChange={setXrefTargetId} onResolve={() => resolveSelectedXref(selectedFindingXref)} />}{selectedFindingInventories.length > 0 && <div className="fidelity-comparison">{selectedFindingInventories.map((inventory) => <div key={inventory.id}><header><b>{inventory.stage}</b><span>{inventory.tool_name || inventory.format}</span></header><dl><div><dt>Объекты</dt><dd>{String(inventory.metrics.entity_count ?? "—")}</dd></div><div><dt>Слои</dt><dd>{String(inventory.metrics.layer_count ?? "—")}</dd></div><div><dt>Листы</dt><dd>{String(inventory.metrics.layout_count ?? "—")}</dd></div></dl>{inventory.artifact_locator && <code>{inventory.artifact_locator}</code>}</div>)}</div>}<details><summary>Evidence</summary><pre>{JSON.stringify(selectedFinding.evidence, null, 2)}</pre></details>{selectedFinding.resolution?.reason && <div className="issue-resolution"><b>{selectedFinding.resolution.action}</b><p>{selectedFinding.resolution.reason}</p></div>}<label className="issue-reason">Обоснование решения<textarea rows={2} value={findingReason} onChange={(event) => setFindingReason(event.target.value)} /></label><div className="issue-actions"><button disabled={!!busy} onClick={() => action("retry-search", `/v1/intake/projects/${projectId}/assistant-runs`)}>Повторить анализ</button><button onClick={() => resolveSelectedFinding("reopen")}>Вернуть</button><button className="reject-button" onClick={() => resolveSelectedFinding("block")}>Блокировать</button><button className="action-primary" onClick={() => resolveSelectedFinding("waive")}>Игнорировать в редакции</button></div></section> : <p className="empty-line">Проблем нет.</p>}</div>}
       </section>
+      {deliveryMenu && <div className="delivery-context-menu" role="menu" style={{ left: deliveryMenu.x, top: deliveryMenu.y }} onClick={(event) => event.stopPropagation()}><div><strong>{deliveryMenu.node.label}</strong><small>{deliveryMenu.node.kind === "folder" ? "Папка поставки" : "Файл поставки"}</small></div><button role="menuitem" disabled={!!busy} onClick={() => removeDeliveryNode(deliveryMenu.node)}><span>×</span>Удалить из проекта</button></div>}
       {error && <div className="toast-error" role="alert">{error}<button onClick={() => setError("")}>×</button></div>}
     </main>
   );

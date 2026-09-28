@@ -136,6 +136,8 @@ export type IntakeFile = {
   role: string | null;
   detected_format: string | null;
   format_version: string | null;
+  source_modified_at: string | null;
+  uploaded_at: string;
 };
 
 export type IntakeStage = {

@@ -45,8 +45,20 @@ layout и не перекрывает последнюю строку основ
 
 ### 2. Два дерева и одна identity
 
-`Материалы` показывает физическое immutable delivery tree: folders и files ровно по загруженным
-relative paths.
+`Материалы` показывает физическое delivery tree: folders и files по загруженным relative paths.
+Исходное содержимое и аудит неизменяемы, но состав рабочей редакции разрешено курировать: через
+контекстное меню пользователь может исключить произвольный файл или виртуальную папку. Папка
+трактуется как boundary-safe prefix relative path, а не как специальная предметная категория.
+Поэтому мусор вроде `PaxHeader` удаляется тем же механизмом, что и любой ошибочно загруженный узел,
+без хардкода по имени.
+
+Исключение выполняется одной транзакцией: удаляются delivery entries, source asset records и все
+производные inventory/conversion/layer/classification/finding связи выбранных файлов. XREF из
+оставшихся документов, указывающий на исключённый target, возвращается в состояние `missing`.
+Редакция снова получает состояние `receiving` и должна пройти повторный анализ. Операция запрещена
+во время активного анализа и после публикации, фиксируется в append-only audit log и требует
+подтверждения в UI. Оригинал в пользовательской папке и content-addressed source blob не удаляются;
+одноразовые conversion artifacts могут быть очищены.
 
 `CAD Explorer` показывает проекцию dependency graph:
 
@@ -63,10 +75,19 @@ CAD document
         └── target CAD document (canonical link or missing/ambiguous target)
 ```
 
-Target document существует в UI один раз по stable document identity. Повторное появление под
-другим parent рисуется alias node; click переводит к canonical node. Cycle заканчивается backlink,
-а не рекурсивным дублированием. Можно переключать представление `Иерархия` / `Граф`, сохраняя одну
-selection/deep-link identity.
+CAD Explorer является multi-root workspace. Корни сначала группируются по смыслу каталогов:
+`Проектное решение`, `Исходные данные`, `Обследования и ведомости`, `Архивы`, затем `Прочее`.
+Внутри каждой группы показываются верхнеуровневые документы и их XREF-ветки. Один target document
+сохраняет stable identity, но намеренно повторяется под каждым host: для чтения дерева это полезнее,
+чем переход к единственному canonical node. Cycle заканчивается backlink, а не бесконечной рекурсией.
+
+Неоднозначный XREF не разрешается автоматически. В инспекторе XREF и в typed issue пользователь
+выбирает target для конкретной ссылки. Карточки кандидатов показывают полный relative path,
+смысловую ветку, размер, SHA-256 и дату изменения исходного файла; если браузер не передал дату,
+отдельно подписывается только дата загрузки. Совпадение смысловой ветки и наиболее свежая дата при
+одинаковом размере могут дать рекомендацию, но radio button остаётся пустым до решения человека.
+Для host document из `Архива` допустимы только targets из `Архива`; проектное решение и исходные
+данные могут ссылаться на архивную ветку. Выбор записывается как graph edge и append-only audit event.
 
 ### 3. Массовая семантическая классификация
 
@@ -178,7 +199,9 @@ review by exception.
 
 ## Verification
 
-- один shared target DWG имеет одну canonical identity и два alias nodes;
+- один shared target DWG повторяется в ветках обоих host documents без потери stable identity;
+- CAD roots сгруппированы по смысловым каталогам, а archive host не предлагает неархивный target;
+- ambiguous XREF остаётся unresolved до явного выбора и после выбора создаёт audit event;
 - XREF cycle заканчивается backlink и не зависает;
 - XREF instance показывает host space/layer и transform;
 - batch category operation создаёт audit event с полным member set и воспроизводится после reload;

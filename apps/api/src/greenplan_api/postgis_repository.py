@@ -164,7 +164,10 @@ class PostgisRepository:
             cursor.execute(
                 """SELECT sa.id,de.relative_path,sa.original_name,de.media_kind,sa.size_bytes,sa.sha256,
                           de.role,sa.properties->>'detected_format' AS detected_format,
-                          sa.properties->>'format_version' AS format_version
+                          sa.properties->>'format_version' AS format_version,
+                          CASE WHEN sa.properties->>'source_modified_ms' ~ '^[0-9]+$'
+                               THEN to_timestamp((sa.properties->>'source_modified_ms')::double precision / 1000.0) END AS source_modified_at,
+                          sa.recorded_at AS uploaded_at
                    FROM intake.delivery_entries de JOIN provenance.source_assets sa ON sa.id=de.source_asset_id
                    WHERE de.delivery_id=%s ORDER BY de.relative_path""",
                 (summary.delivery_id,),

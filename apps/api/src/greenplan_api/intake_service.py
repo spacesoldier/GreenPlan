@@ -45,6 +45,11 @@ def safe_archive_member(raw: str) -> str | None:
     return path.as_posix()
 
 
+
+def _is_archive_path(value: str) -> bool:
+    parts = value.replace("\\", "/").casefold().replace("ё", "е").split("/")[:-1]
+    return any("архив" in part or "archive" in part for part in parts)
+
 def _expand_nested_zip_archives(cursor, revision_id: UUID, delivery_id: UUID, root: Path) -> None:
     cursor.execute(
         """SELECT de.id AS entry_id,de.relative_path,sa.*
@@ -319,6 +324,7 @@ def register_upload(
     detected_format: str,
     format_version: str | None,
     deduplicated: bool,
+    source_modified_ms: int | None = None,
 ) -> UUID:
     asset_id = uuid4()
     with _connect(database_url) as connection, connection.cursor() as cursor:
@@ -360,6 +366,7 @@ def register_upload(
                     "detected_format": detected_format,
                     "format_version": format_version,
                     "deduplicated_blob": deduplicated,
+                    "source_modified_ms": source_modified_ms,
                 }),
             ),
         )
@@ -1178,6 +1185,63 @@ def resolve_finding(
             (finding_id, Jsonb({"action": action, "reason": reason, "impact": impact})),
         )
         return {"id": str(resolution["id"]), "status": status, "action": action, "impact": impact}
+
+
+def resolve_xref_target(
+    database_url: str, project_id: UUID, xref_id: UUID, target_asset_id: UUID,
+) -> dict:
+    with _connect(database_url) as connection, connection.cursor() as cursor:
+        cursor.execute(
+            """SELECT cx.id,cx.reference_name,cx.original_path,cx.resolved_status,cx.properties,
+                      cd.source_asset_id,source.relative_path AS source_relative_path,
+                      target.source_asset_id AS target_asset_id,target.relative_path AS target_relative_path
+               FROM intake.cad_xrefs cx
+               JOIN intake.cad_documents cd ON cd.id=cx.cad_document_id
+               JOIN intake.delivery_entries source ON source.source_asset_id=cd.source_asset_id
+               JOIN intake.deliveries delivery ON delivery.id=source.delivery_id
+               JOIN catalog.project_revisions revision ON revision.id=delivery.project_revision_id
+               JOIN intake.delivery_entries target ON target.delivery_id=delivery.id
+                                                  AND target.source_asset_id=%s
+               WHERE revision.project_id=%s AND cx.id=%s
+               FOR UPDATE OF cx""",
+            (target_asset_id, project_id, xref_id),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            raise KeyError(xref_id)
+        matches = [str(value) for value in (row["properties"] or {}).get("matches", [])]
+        if row["target_relative_path"] not in matches:
+            raise IntakeConflict("target file is not one of the recorded XREF candidates")
+        if _is_archive_path(row["source_relative_path"]) and not _is_archive_path(row["target_relative_path"]):
+            raise IntakeConflict("an XREF hosted in an archive may only target another archive file")
+        cursor.execute(
+            """UPDATE intake.cad_xrefs
+               SET referenced_asset_id=%s,resolved_status='resolved',
+                   properties=properties||%s
+               WHERE id=%s""",
+            (target_asset_id, Jsonb({"resolution_method": "manual", "selected_path": row["target_relative_path"]}), xref_id),
+        )
+        cursor.execute(
+            """UPDATE intake.fidelity_findings finding SET status='resolved'
+               FROM catalog.project_revisions revision
+               WHERE finding.revision_id=revision.id AND revision.project_id=%s
+                 AND finding.source_asset_id=%s AND finding.code='xref_ambiguous'
+                 AND (finding.evidence->'xref'->>'path'=%s
+                      OR finding.evidence->'xref'->>'name'=%s)""",
+            (project_id, row["source_asset_id"], row["original_path"], row["reference_name"]),
+        )
+        cursor.execute(
+            """INSERT INTO audit.events(action,entity_schema,entity_table,entity_id,metadata)
+               VALUES ('resolve_xref','intake','cad_xrefs',%s,%s)""",
+            (xref_id, Jsonb({
+                "source_asset_id": str(row["source_asset_id"]),
+                "source_relative_path": row["source_relative_path"],
+                "target_asset_id": str(target_asset_id),
+                "target_relative_path": row["target_relative_path"],
+                "method": "manual",
+            })),
+        )
+        return {"xref_id": str(xref_id), "status": "resolved", "target_asset_id": str(target_asset_id), "target_relative_path": row["target_relative_path"]}
 
 
 def publish_revision(database_url: str, intake_root: Path, project_id: UUID) -> UUID:

@@ -22,6 +22,7 @@ from .models import (
     ClassificationReviewRequest,
     ClassificationBatchReviewRequest,
     FindingResolutionRequest,
+    XrefResolutionRequest,
     SemanticSuggestionRequest,
     SemanticSuggestionJobView,
     AssistantRunView,
@@ -47,9 +48,11 @@ from .intake_service import (
     review_classification,
     review_classifications_batch,
     resolve_finding,
+    resolve_xref_target,
     soft_delete_project,
     store_stream,
 )
+from .delivery_delete import remove_delivery_path
 from .assistant import create_or_resume_run, execute_run, reconcile_project_runs
 from .semantic_jobs import (
     create_semantic_suggestion_job,
@@ -215,6 +218,7 @@ def create_app(repository: Repository | None = None) -> FastAPI:
         repo: Repo,
         relative_path: Annotated[str, Form()],
         file: Annotated[UploadFile, File()],
+        last_modified_ms: Annotated[int | None, Form()] = None,
     ):
         database_url, _workspace_code, root = intake_settings(repo)
         if repo.get_intake_project(project_id) is None:
@@ -231,7 +235,7 @@ def create_app(repository: Repository | None = None) -> FastAPI:
         try:
             asset_id = register_upload(
                 database_url, project_id, safe_path, checksum, size, locator,
-                detected_format, format_version, deduplicated,
+                detected_format, format_version, deduplicated, last_modified_ms,
             )
         except KeyError as exc:
             raise ApiError(404, "project_not_found", "intake project does not exist") from exc
@@ -241,6 +245,19 @@ def create_app(repository: Repository | None = None) -> FastAPI:
             asset_id=asset_id, relative_path=safe_path, sha256=checksum,
             size_bytes=size, detected_format=detected_format, deduplicated=deduplicated,
         )
+
+    @app.delete("/v1/intake/projects/{project_id}/files", status_code=204, tags=["intake"])
+    def delete_intake_path(project_id: UUID, relative_path: Annotated[str, Query()], repo: Repo):
+        database_url, _workspace_code, root = intake_settings(repo)
+        try:
+            remove_delivery_path(database_url, root, project_id, relative_path)
+        except KeyError as exc:
+            raise ApiError(404, "delivery_path_not_found", "file or folder does not exist in this delivery") from exc
+        except ValueError as exc:
+            raise ApiError(422, "unsafe_relative_path", str(exc)) from exc
+        except IntakeConflict as exc:
+            raise ApiError(409, "delivery_path_conflict", str(exc)) from exc
+        return Response(status_code=204)
 
     @app.post("/v1/intake/projects/{project_id}/analyze", response_model=IntakeActionResult, status_code=202, tags=["intake"])
     def analyze_intake_project(project_id: UUID, background: BackgroundTasks, repo: Repo):
@@ -408,6 +425,18 @@ def create_app(repository: Repository | None = None) -> FastAPI:
             return resolve_finding(database_url, project_id, finding_id, payload.action, payload.reason)
         except KeyError as exc:
             raise ApiError(404, "finding_not_found", "finding does not exist") from exc
+
+    @app.post("/v1/intake/projects/{project_id}/xrefs/{xref_id}/resolve", tags=["intake"])
+    def resolve_intake_xref(
+        project_id: UUID, xref_id: UUID, payload: XrefResolutionRequest, repo: Repo,
+    ):
+        database_url, _workspace_code, _root = intake_settings(repo)
+        try:
+            return resolve_xref_target(database_url, project_id, xref_id, payload.target_asset_id)
+        except KeyError as exc:
+            raise ApiError(404, "xref_not_found", "XREF or selected target does not exist in this project") from exc
+        except IntakeConflict as exc:
+            raise ApiError(409, "xref_resolution_conflict", str(exc)) from exc
 
     @app.post("/v1/intake/projects/{project_id}/publish", response_model=IntakeActionResult, tags=["intake"])
     def publish_intake_project(project_id: UUID, repo: Repo):
