@@ -74,6 +74,7 @@ ADR фиксируют архитектурное решение, его кон�
 | [0047](0047-root-scoped-cad-viewer-workspace.md) | Accepted | Viewer открывает один publication root с его XREF closure и позволяет исправлять категории слоёв |
 | [0048](0048-semantic-diff-revisions.md) | Accepted | Накопительные semantic diff revisions поверх неизменяемой геометрии |
 | [0049](0049-planting-feasibility-zone-reconstruction.md) | Accepted | Seed-assisted восстановление поверхностных зон и нормативное вычитание ограничений |
+| [0050](0050-surface-region-inspection-and-prototype-clearance.md) | Accepted | Инспектор пересечений, сохранение найденного контура и прототипный отступ от наземных объектов |
 
 ## Именование
 

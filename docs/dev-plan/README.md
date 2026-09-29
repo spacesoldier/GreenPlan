@@ -35,6 +35,7 @@ draft ADR -> accepted ADR -> planned phase -> tests written/failing
 | [Phase 4, iteration 1](phase-04-iteration-01-sp42-rulebook-taxonomy.md) | In progress | СП 42 rulebook и нормативно согласованная CAD taxonomy v2 |
 | [Phase 4, iteration 2](phase-04-iteration-02-knowledge-library-bootstrap.md) | Planned | Qwen runtime, идемпотентный разбор СП и библиотека нормативов, принципов генерации и CAD-символов растений |
 | [Phase 4, iteration 4](phase-04-iteration-04-semantic-revisions-and-planting-zones.md) | Planned | Semantic diff revisions, инструменты навигации и обозначения газона, вычисление planting feasibility zones |
+| [Phase 4, iteration 5](phase-04-iteration-05-surface-region-inspector.md) | In progress | Инспектор контура, spatial inventory, сохранение candidate и prototype clearance |
 
 ## Обязательная структура будущей фазы
 
