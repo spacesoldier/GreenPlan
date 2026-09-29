@@ -6,7 +6,7 @@ from typing import Iterable, Mapping
 from .dxf_ingest import classify_layer
 
 
-TAXONOMY_VERSION = "cad-v1"
+TAXONOMY_VERSION = "cad-v2-sp42"
 
 
 @dataclass(frozen=True)
@@ -58,7 +58,7 @@ def classify_layer_axes(
         "transport": ("дорог", "тротуар", "проезд", "борт", "бордюр", "покрыт"),
         "utility": ("водопровод", "канализац", "водосток", "дренаж", "газопровод", "кабель", "мгтс", "теплосет"),
         "building": ("здан", "строен", "сооруж"),
-        "terrain": ("рельеф", "горизонт", "отметк"),
+        "terrain": ("рельеф", "горизонт", "отметк", "откос"),
         "boundary": ("границ", "красн", "участ"),
         "protection_zone": ("охран", "санитар"),
         "annotation": ("текст", "подпис", "размер", "легенд", "штамп"),

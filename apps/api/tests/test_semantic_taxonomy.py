@@ -12,7 +12,16 @@ def test_taxonomy_keeps_domain_lifecycle_and_representation_independent():
     assert result.lifecycle.label == "proposed"
     assert result.representation.label == "crown"
     assert result.document_role.label == "general_plan"
-    assert result.object_class.label == "vegetation.proposed.tree"
+    assert result.object_class.label == "vegetation.tree"
+
+
+def test_object_class_does_not_encode_lifecycle():
+    existing = classify_layer_axes("СУЩЕСТВУЮЩИЕ ДЕРЕВЬЯ", entity_types=["CIRCLE"])
+    proposed = classify_layer_axes("ПРОЕКТИРУЕМЫЕ ДЕРЕВЬЯ", entity_types=["CIRCLE"])
+
+    assert existing.object_class.label == proposed.object_class.label == "vegetation.tree"
+    assert existing.lifecycle.label == "existing"
+    assert proposed.lifecycle.label == "proposed"
 
 
 def test_utility_annotation_does_not_become_pipeline_geometry():
@@ -31,6 +40,13 @@ def test_unknown_and_mixed_layers_require_review():
     assert unknown.review_required is True
     assert mixed.review_required is True
     assert mixed.domain.label == "mixed"
+
+
+def test_slope_layers_are_terrain_with_a_precise_object_class():
+    result = classify_layer_axes("ОТКОСЫ", entity_types=["LWPOLYLINE"])
+
+    assert result.domain.label == "terrain"
+    assert result.object_class.label == "terrain.slope_toe"
 
 
 def test_external_feature_snapshot_uses_an_explicit_allowlist():

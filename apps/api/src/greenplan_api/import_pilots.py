@@ -227,8 +227,13 @@ def ingest_geometry(
     ids: dict[str, UUID],
     primary_asset_id: UUID,
     max_entities: int,
+    identity_scope: str | None = None,
+    object_context: dict[str, Any] | None = None,
+    refresh_derived: bool = True,
 ) -> dict[str, Any]:
     document = ezdxf.readfile(primary)
+    scope_token = sha1(identity_scope.encode()).hexdigest()[:10] if identity_scope else ""
+    context = dict(object_context or {})
     layer_counts: Counter[str] = Counter()
     type_counts: Counter[str] = Counter()
     for primitive in iter_primitives(document.modelspace()):
@@ -267,7 +272,7 @@ def ingest_geometry(
         classification = classify_layer(layer)
         class_id = class_ids.get(classification.class_code) or class_ids["unknown.constraint"]
         handle = primitive.source_handle or f"virtual-{primitive_index}"
-        identity = f"{spec.code}:{ids['model']}:{handle}:{primitive_index}"
+        identity = f"{spec.code}:{ids['model']}:{scope_token}:{handle}:{primitive_index}"
         object_id = stable_uuid(f"object:{identity}")
         geometry_id = stable_uuid(f"geometry:{identity}")
         fragment_id = stable_uuid(f"fragment:{identity}")
@@ -279,13 +284,15 @@ def ingest_geometry(
             "entity_type": primitive.entity.dxftype(),
         }
         locator_hash = sha1(json.dumps(locator, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+        scene_layer_id = f"{classification.layer_id}-{scope_token}" if scope_token else classification.layer_id
         properties = {
-            "layer_id": classification.layer_id,
+            "layer_id": scene_layer_id,
             "source_layer": layer,
             "source_type": primitive.entity.dxftype(),
             "source_handle": handle,
             "classification_reason": classification.reason,
             "sampled": caps[layer] < layer_counts[layer],
+            **context,
         }
         object_rows.append(
             (
@@ -303,7 +310,7 @@ def ingest_geometry(
         fragment_rows.append(
             (
                 fragment_id, primary_asset_id, Jsonb(locator), locator_hash,
-                Jsonb({"model_id": str(ids["model"]), "layer_id": classification.layer_id}),
+                Jsonb({"model_id": str(ids["model"]), "layer_id": scene_layer_id, **context}),
             )
         )
         evidence_rows.append(
@@ -319,8 +326,8 @@ def ingest_geometry(
     with connection.cursor() as cursor:
         for layer, count in layer_counts.items():
             classification = classify_layer(layer)
-            fragment_id = stable_uuid(f"layer-fragment:{spec.code}:{ids['model']}:{layer}")
-            locator = {"layer": layer}
+            fragment_id = stable_uuid(f"layer-fragment:{spec.code}:{ids['model']}:{scope_token}:{layer}")
+            locator = {"layer": layer, **({"publication_root": identity_scope} if identity_scope else {})}
             cursor.execute(
                 """INSERT INTO provenance.source_fragments(
                        id,source_asset_id,fragment_kind,locator,locator_hash,properties)
@@ -329,10 +336,11 @@ def ingest_geometry(
                 (
                     fragment_id, primary_asset_id, Jsonb(locator), sha1(layer.encode()).hexdigest(),
                     Jsonb({
-                        "model_id": str(ids["model"]), "layer_id": classification.layer_id,
+                        "model_id": str(ids["model"]), "layer_id": (f"{classification.layer_id}-{scope_token}" if scope_token else classification.layer_id),
                         "class_code": classification.class_code, "semantic_status": classification.semantic_status,
                         "confidence": classification.confidence, "source_entity_count": count,
                         "imported_geometry_count": imported[layer],
+                        **context,
                     }),
                 ),
             )
@@ -381,8 +389,9 @@ def ingest_geometry(
                 ids["model"],
             ),
         )
-        cursor.execute("SELECT geo.refresh_model_spatial_focus(%s)", (ids["model"],))
-        cursor.execute("SELECT geo.refresh_model_render_assemblies(%s)", (ids["model"],))
+        if refresh_derived:
+            cursor.execute("SELECT geo.refresh_model_spatial_focus(%s)", (ids["model"],))
+            cursor.execute("SELECT geo.refresh_model_render_assemblies(%s)", (ids["model"],))
     return {
         "source_entities": sum(layer_counts.values()),
         "imported_geometries": sum(imported.values()),

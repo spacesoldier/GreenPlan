@@ -5,10 +5,12 @@ import pytest
 
 from greenplan_api.intake_service import (
     candidate_score,
+    compare_inventory_metrics,
     detect_cad_format,
     dxf_inventory,
     media_kind_for,
     normalize_relative_path,
+    descendant_matches,
     store_stream,
     safe_archive_member,
 )
@@ -17,6 +19,7 @@ from greenplan_api.decision_models import (
     CAD_LAYER_CATEGORY_CRITERIA,
     DecisionProviderError,
     TypedChoiceQuestion,
+    canonical_layer_category_match,
     laya_layer_category,
     validate_typed_answers,
 )
@@ -50,6 +53,38 @@ def test_archive_member_path_cannot_escape_or_import_service_metadata():
     assert safe_archive_member("../secret.dwg") is None
     assert safe_archive_member("PaxHeaders.123/file.dwg") is None
 
+
+
+
+def test_xref_prefers_unique_descendant_candidate_below_host_directory():
+    source = "Улица/Проектное решение/DWG/head.dwg"
+    nested = "Улица/Проектное решение/DWG/XREF/base.dwg"
+    elsewhere = "Улица/Исходные данные/base.dwg"
+    assert descendant_matches(source, [elsewhere, nested]) == [nested]
+
+
+def test_xref_keeps_all_descendant_candidates_for_manual_choice():
+    source = "Улица/Проектное решение/DWG/head.dwg"
+    assert descendant_matches(source, ["Улица/Проектное решение/DWG/A/base.dwg", "Улица/Проектное решение/DWG/B/base.dwg"]) == ["Улица/Проектное решение/DWG/A/base.dwg", "Улица/Проектное решение/DWG/B/base.dwg"]
+
+
+
+def test_fidelity_comparison_uses_only_metrics_available_on_both_sides():
+    result = compare_inventory_metrics(
+        {"entity_count": 12, "layer_count": 3},
+        {"entity_count": 12, "layer_count": 4, "layout_count": 2},
+    )
+    assert result == {
+        "comparable": True,
+        "checked_fields": ["entity_count", "layer_count"],
+        "differences": {"layer_count": {"source": 3, "converted": 4}},
+    }
+
+
+def test_fidelity_comparison_stays_not_comparable_without_shared_metrics():
+    assert compare_inventory_metrics({"reader": "LibreDWG"}, {"entity_count": 12}) == {
+        "comparable": False, "checked_fields": [], "differences": {},
+    }
 
 def test_master_candidate_prefers_general_plan_over_xref():
     head_score, head_role, _ = candidate_score("Проект/ГР_Песчаный переулок.dwg")
@@ -122,6 +157,28 @@ def test_unclear_delivery_entry_is_sent_to_model_assist():
     suggestion = classify_delivery_path("misc/AB-42.bin")
     assert suggestion.category == "unknown"
     assert needs_model_assist(suggestion)
+
+
+def test_canonical_layer_names_are_auto_confirmable_but_ambiguity_is_not():
+    assert canonical_layer_category_match("Кабель связи")[:2] == ("utility.telecom.cable", 1.0)
+    assert canonical_layer_category_match("Проектируемый водопровод")[0] == "utility.water.pipeline"
+    assert canonical_layer_category_match("Водопровд")[0] == "utility.water.pipeline"
+    assert canonical_layer_category_match("Инженерные сети")[0] == "utility.unknown"
+    for name in ("Трубопроводы", "Подземные коммуникации", "Существующие подземные коммуникации"):
+        assert canonical_layer_category_match(name)[0] == "utility.unknown"
+    for name in ("Теплосеть", "Теплосети", "Тепловые сети", "Теплотрасса", "Теплопровод"):
+        assert canonical_layer_category_match(name)[0] == "utility.heat.pipeline"
+    for name in ("Возд линия", "Возд. линии", "Воздушная линия", "Воздушные линии", "Возд линии телеграф"):
+        assert canonical_layer_category_match(name)[0] == "utility.power.overhead"
+    for name in (
+        "Навес", "Навесы", "Памятник", "Памятники", "Мост", "Мосты",
+        "Павильон", "Павильоны", "Фонтан", "Фонтаны",
+        "Ограда", "Ограды", "Вентилятор", "Вентиляторы",
+        "Спецсооружение", "Спец. сооружения", "Специальное сооружение",
+    ):
+        assert canonical_layer_category_match(name)[0] == "structure.building"
+    assert canonical_layer_category_match("Кабель связи силовой") is None
+    assert canonical_layer_category_match("A-42-X") is None
 
 
 def test_typed_provider_rejects_unknown_labels_and_question_ids():
@@ -207,3 +264,27 @@ def test_xref_assembly_embeds_child_and_preserves_insert_transform(tmp_path):
     assert virtual[0].dxftype() == "LINE"
     assert tuple(round(value, 5) for value in list(virtual[0].dxf.start)[:2]) == (10.0, 20.0)
     assert tuple(round(value, 5) for value in list(virtual[0].dxf.end)[:2]) == (10.0, 22.0)
+
+
+def test_xref_assembly_records_engineer_waived_missing_reference(tmp_path):
+    head = ezdxf.new("R2018")
+    block = head.blocks.new("MISSING")
+    block.block.dxf.flags = 4
+    block.block.dxf.xref_path = "missing/reference.dwg"
+    head.modelspace().add_blockref("MISSING", (0, 0))
+    head_path = tmp_path / "head.dxf"
+    head.saveas(head_path)
+
+    assembled, manifest = assemble_xrefs(
+        head_path,
+        lambda _parent, _original: None,
+        lambda _parent, original: original == "missing/reference.dwg",
+    )
+
+    assert assembled is not None
+    assert manifest.dependencies == []
+    assert manifest.skipped_unresolved == [{
+        "parent": str(head_path.resolve()),
+        "block": "MISSING",
+        "path": "missing/reference.dwg",
+    }]

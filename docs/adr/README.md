@@ -55,6 +55,19 @@ ADR фиксируют архитектурное решение, его кон�
 | [0028](0028-cad-workbench-graph-navigation-bulk-review-and-activity-dock.md) | Accepted | CAD workbench, graph/tree navigation, batch review, typed issues и нижний activity dock |
 | [0029](0029-preparation-wizard-selection-inspector-and-resizable-tray.md) | Accepted | Верхний мастер, selection-driven CAD inspector и resizable bottom tray |
 | [0030](0030-local-cad-semantic-suggestion-worker.md) | Accepted | Локальный Laya service и фоновая очередь model suggestions для CAD-слоёв |
+| [0031](0031-xref-triggered-fidelity-recheck.md) | Accepted | Разрешение XREF повторно запускает сравнение DWG/DXF и обновляет очередь проблем |
+| [0032](0032-evidence-assisted-cad-layer-semantics.md) | Proposed | Контекстная классификация слоёв, retrieval инженерных примеров и benchmark CPU-моделей |
+| [0033](0033-deduplicated-evidence-and-vector-retrieval.md) | Proposed | Дедуплицированные CAD/нормативные корпуса, pgvector-first retrieval и rebuildable vector projection |
+| [0034](0034-dual-cpu-model-orchestration-with-ax.md) | Accepted | Каскад Qwen/Gemma на CPU, последовательный llama.cpp runtime и typed orchestration через ax-llm/ax |
+| [0035](0035-cad-surface-reconstruction-and-spatial-context.md) | Proposed | Entity-level HATCH/road reconstruction, semantic surfaces и вычислимые пространственные отношения |
+| [0036](0036-sp42-provenance-gated-constraint-rules.md) | Accepted | СП 42 кодируется как provenance-gated review rules с сохранением примечаний и способа измерения |
+| [0037](0037-standard-aligned-cad-object-taxonomy-v2.md) | Accepted | Закрытая object taxonomy v2 отделяет нормативный класс от lifecycle и representation |
+| [0038](0038-grouped-cad-categories-and-canonical-name-auto-confirmation.md) | Accepted | Конечные CAD-классы сгруппированы, а уникальные совпадения имени слоя подтверждаются автоматически |
+| [0039](0039-assistant-category-assignment-for-unclassified-layers.md) | Accepted | Ассистент сразу назначает содержательные классы только неразобранным слоям |
+| [0040](0040-independent-geometry-and-semantic-publication-readiness.md) | Proposed | Геометрический preview публикуется при видимом semantic debt, planning имеет отдельный task gate |
+| [0041](0041-faceted-layer-navigator-for-spatial-viewer.md) | Proposed | Viewer использует фасетный source/semantic layer navigator и единый visibility state |
+| [0042](0042-multi-root-publication-set.md) | Accepted | Публикация выбирает несколько корней CAD-графа и автоматически включает их XREF closures |
+| [0043](0043-asynchronous-observable-publication-job.md) | Proposed | Фоновая single-flight публикация, серверный прогресс и события activity dock |
 
 ## Именование
 

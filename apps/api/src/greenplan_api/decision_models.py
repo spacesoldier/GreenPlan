@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from difflib import SequenceMatcher
+import re
 from typing import Mapping
 from urllib.request import Request, urlopen
 
@@ -21,21 +23,129 @@ DELIVERY_ROLE_CRITERIA = {
 }
 
 CAD_LAYER_CATEGORY_CRITERIA = {
-    "vegetation.existing": "Существующие деревья, кустарники и другие зелёные насаждения",
-    "vegetation.proposed": "Проектируемые посадки деревьев, кустарников и озеленение",
-    "surface.lawn": "Газон, трава, почвопокровное озеленение или озеленённая поверхность",
-    "transport.road": "Дороги, проезды, тротуары, бордюры и транспортные покрытия",
-    "utility.unknown": "Инженерные сети, трубопроводы, кабели и коммуникации неясного типа",
-    "structure.building": "Здания, строения и сооружения",
-    "territory.work_boundary": "Границы работ, участков, охранных или санитарных зон",
-    "terrain": "Рельеф, горизонтали и высотные отметки",
-    "not_applicable": "Текст, размеры, рамка, штамп, легенда или служебная графика",
+    "vegetation.tree": "Дерево",
+    "vegetation.shrub": "Кустарник",
+    "vegetation.grass": "Травянистая растительность и газон",
+    "vegetation.mixed": "Смешанные зелёные насаждения",
+    "structure.building": "Здание или строение",
+    "structure.wall.external": "Наружная стена здания",
+    "structure.support": "Опора, мачта, эстакада или мостовая опора",
+    "structure.retaining_wall": "Подпорная стенка",
+    "transport.road.carriageway": "Проезжая часть",
+    "transport.road.edge": "Край проезжей части или укреплённой полосы обочины",
+    "transport.road.curb": "Бортовой камень",
+    "transport.pedestrian.path_edge": "Край тротуара или садовой дорожки",
+    "transport.tram.track_edge": "Край трамвайного полотна",
+    "transport.cycleway.edge": "Край велосипедной дорожки",
+    "transport.ditch.edge": "Бровка канавы",
+    "utility.unknown": "Инженерные сети, тип не уточнён",
+    "utility.water.pipeline": "Водопровод",
+    "utility.drainage.pipeline": "Дренаж или водосток",
+    "utility.sewer.pipeline": "Канализация",
+    "utility.heat.pipeline": "Тепловая сеть",
+    "utility.gas.pipeline": "Газопровод",
+    "utility.power.cable": "Силовой кабель",
+    "utility.power.overhead": "Воздушная линия электропередачи",
+    "utility.telecom.cable": "Кабель связи",
+    "territory.work_boundary": "Граница работ",
+    "territory.visibility_zone": "Треугольник или зона видимости",
+    "territory.metro_technical_zone": "Техническая зона метрополитена",
+    "territory.sanitary_protection_zone": "Санитарно-защитная зона",
+    "territory.utility_protection_zone": "Охранная зона инженерной сети",
+    "terrain.slope_toe": "Подошва откоса или бровка террасы",
+    "terrain.groundwater_level": "Уровень грунтовых вод",
+    "terrain": "Рельеф (тип не уточнён)",
+    "not_applicable": "Текст, размер, рамка, штамп, легенда или служебная графика",
     "unknown": "Недостаточно данных или смешанное содержимое",
 }
 
 LAYER_FEATURE_ALLOWLIST = (
     "schema_version", "layer_name", "entity_types", "entity_count", "document_role", "relative_path",
 )
+
+
+CAD_LAYER_SEMANTIC_ALIASES: dict[str, tuple[str, ...]] = {
+    "structure.building": (
+        "навес", "навесы",
+        "памятник", "памятники",
+        "мост", "мосты",
+        "павильон", "павильоны",
+        "фонтан", "фонтаны",
+        "ограда", "ограды", "ограждение", "ограждения",
+        "вентилятор", "вентиляторы",
+        "спецсооружение", "спецсооружения",
+        "спец сооружение", "спец сооружения",
+        "специальное сооружение", "специальные сооружения",
+    ),
+    "utility.power.overhead": (
+        "возд линия", "возд линии", "воздушная линия", "воздушные линии",
+    ),
+    "utility.heat.pipeline": (
+        "тепловая сеть", "тепловые сети", "теплосеть", "теплосети", "теплосетей",
+        "теплотрасса", "теплотрассы", "теплопровод",
+    ),
+}
+
+
+_AUTO_LAYER_PREFIXES = {
+    "слой", "новый", "новая", "новое", "новые", "существующий", "существующая",
+    "существующее", "проектируемый", "проектируемая", "проектируемое", "проектный",
+    "проектная", "проектное", "планируемый", "планируемая", "планируемое",
+}
+
+def _normalise_category_text(value: str) -> str:
+    tokens = re.sub(r"[^a-zа-я0-9]+", " ", value.casefold().replace("ё", "е")).split()
+    tokens = [token for token in tokens if not token.isdigit()]
+    while tokens and tokens[0] in _AUTO_LAYER_PREFIXES:
+        tokens.pop(0)
+    return " ".join(tokens)
+
+def _category_aliases(code: str, description: str) -> tuple[str, ...]:
+    if code == "not_applicable":
+        base = ("текст", "размер", "рамка", "штамп", "легенда", "служебная графика")
+    elif code == "utility.unknown":
+        base = (
+            "инженерная сеть", "инженерные сети",
+            "инженерная коммуникация", "инженерные коммуникации",
+            "подземная коммуникация", "подземные коммуникации",
+            "трубопровод", "трубопроводы",
+        )
+    else:
+        base = tuple(part.strip() for part in re.split(r"\s+или\s+", description) if part.strip())
+    return tuple(dict.fromkeys((*base, *CAD_LAYER_SEMANTIC_ALIASES.get(code, ()))))
+
+def canonical_layer_category_match(layer_name: str) -> tuple[str, float, str] | None:
+    """Return only a unique, near-literal canonical class match safe for auto-confirmation."""
+    name = _normalise_category_text(layer_name)
+    if not name:
+        return None
+    name_tokens = set(name.split())
+    candidates: list[tuple[float, str, str]] = []
+    for code, description in CAD_LAYER_CATEGORY_CRITERIA.items():
+        if code == "unknown":
+            continue
+        for raw_alias in _category_aliases(code, description):
+            alias = _normalise_category_text(raw_alias)
+            if not alias:
+                continue
+            alias_tokens = set(alias.split())
+            if name == alias:
+                score = 1.0
+            elif alias_tokens.issubset(name_tokens) and len(name_tokens - alias_tokens) <= 2:
+                score = 0.97 - 0.01 * len(name_tokens - alias_tokens)
+            else:
+                score = SequenceMatcher(None, name, alias).ratio()
+                if score < 0.94:
+                    continue
+            candidates.append((score, code, alias))
+    if not candidates:
+        return None
+    candidates.sort(reverse=True)
+    best_score, best_code, best_alias = candidates[0]
+    competing = {code for score, code, _alias in candidates if best_score - score < 0.01}
+    if len(competing) != 1:
+        return None
+    return best_code, best_score, f"Название слоя близко к каноническому классу: {best_alias}"
 
 
 class DecisionProviderError(RuntimeError):

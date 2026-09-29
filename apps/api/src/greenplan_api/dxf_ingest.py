@@ -33,36 +33,46 @@ def layer_key(name: str) -> str:
 def classify_layer(name: str) -> LayerClassification:
     value = name.casefold().replace("ё", "е")
     rules: list[tuple[tuple[str, ...], str, float, str]] = [
-        (("границ",), "territory.work_boundary", 0.92, "layer name contains boundary"),
-        (("водопровод",), "utility.water.pipeline", 0.94, "layer name contains water pipeline"),
-        (("канализац", "водосток", "дренаж"), "utility.sewer.pipeline", 0.88, "layer name contains sewer/drainage"),
-        (("кабель связи", "мгтс", "телеком", "связи"), "utility.telecom.cable", 0.91, "layer name contains telecom"),
-        (("кабель электр", "электрос", "освещен", "заземлен"), "utility.power.cable", 0.9, "layer name contains power"),
-        (("газопровод", "газоснаб"), "utility.gas.pipeline", 0.94, "layer name contains gas"),
-        (("здан", "строен", "сооруж"), "structure.building", 0.8, "layer name contains building"),
-        (("борт", "бордюр"), "transport.road.curb", 0.87, "layer name contains curb"),
-        (("дорог", "проезд", "тротуар", "проезж"), "transport.road", 0.72, "layer name contains transport surface"),
-        (("кустар",), "vegetation.existing.shrub", 0.78, "layer name contains shrub"),
-        (("дерев",), "vegetation.existing.tree", 0.78, "layer name contains tree"),
-        (("дендр", "растени", "зелены"), "vegetation.existing", 0.7, "layer name contains vegetation"),
-        (("газон", "трава", "травянист"), "surface.lawn", 0.76, "layer name contains lawn"),
+        (("границ работ", "граница работ"), "territory.work_boundary", 0.94, "work boundary"),
+        (("треугольник видим", "зона видим"), "territory.visibility_zone", 0.94, "visibility zone"),
+        (("техническая зона метро",), "territory.metro_technical_zone", 0.96, "metro technical zone"),
+        (("санитарно-защит", "сзз"), "territory.sanitary_protection_zone", 0.94, "sanitary protection zone"),
+        (("охранная зона",), "territory.utility_protection_zone", 0.86, "utility protection zone"),
+        (("водопровод",), "utility.water.pipeline", 0.94, "water pipeline"),
+        (("дренаж", "водосток", "ливнев"), "utility.drainage.pipeline", 0.92, "drainage pipeline"),
+        (("канализац",), "utility.sewer.pipeline", 0.94, "sewer pipeline"),
+        (("теплосет", "тепловая сет", "тепловые сет", "теплопровод", "теплотрас"), "utility.heat.pipeline", 0.94, "heat network"),
+        (("кабель связи", "мгтс", "телеком", "связи"), "utility.telecom.cable", 0.91, "telecom cable"),
+        (("вл ", "воздушная лини", "лэп"), "utility.power.overhead", 0.91, "overhead power line"),
+        (("кабель электр", "электрос", "освещен", "заземлен"), "utility.power.cable", 0.90, "power cable"),
+        (("газопровод", "газоснаб"), "utility.gas.pipeline", 0.94, "gas pipeline"),
+        (("подпорн",), "structure.retaining_wall", 0.94, "retaining wall"),
+        (("наружная стен", "стена здан"), "structure.wall.external", 0.92, "external building wall"),
+        (("опора", "мачт"), "structure.support", 0.84, "support or mast"),
+        (("здан", "строен", "сооруж"), "structure.building", 0.80, "building"),
+        (("откос", "подошва откоса", "бровка откоса", "бровка террас"), "terrain.slope_toe", 0.94, "slope or terrace toe"),
+        (("край трамва", "трамвайн"), "transport.tram.track_edge", 0.92, "tram track edge"),
+        (("край тротуар", "край дорожк", "тротуар"), "transport.pedestrian.path_edge", 0.88, "pedestrian path edge"),
+        (("велодорож", "велосипедн"), "transport.cycleway.edge", 0.90, "cycleway edge"),
+        (("борт", "бордюр"), "transport.road.curb", 0.87, "road curb"),
+        (("край проезж", "кромка проезж", "обочин"), "transport.road.edge", 0.90, "road edge"),
+        (("проезж", "дорог", "проезд"), "transport.road.carriageway", 0.78, "carriageway"),
+        (("канава", "кювет"), "transport.ditch.edge", 0.88, "ditch edge"),
+        (("кустар",), "vegetation.shrub", 0.82, "shrub"),
+        (("дерев",), "vegetation.tree", 0.82, "tree"),
+        (("газон", "трава", "травянист"), "vegetation.grass", 0.80, "grass vegetation"),
+        (("дендр", "растени", "зелены", "озелен"), "vegetation.mixed", 0.72, "mixed vegetation"),
+        (("рельеф", "горизонтал", "отметк"), "terrain", 0.72, "terrain"),
     ]
     for needles, class_code, confidence, reason in rules:
         if any(needle in value for needle in needles):
-            if any(token in value for token in ("проект", "посадк")) and class_code.startswith("vegetation.existing"):
-                class_code = class_code.replace("vegetation.existing", "vegetation.proposed")
             return LayerClassification(
-                layer_id=layer_key(name),
-                class_code=class_code,
-                semantic_status="inferred",
-                confidence=confidence,
-                reason=reason,
+                layer_id=layer_key(name), class_code=class_code,
+                semantic_status="inferred", confidence=confidence, reason=reason,
             )
     return LayerClassification(
-        layer_id=layer_key(name),
-        class_code="unknown.constraint",
-        semantic_status="needs_review",
-        confidence=0.25,
+        layer_id=layer_key(name), class_code="unknown.constraint",
+        semantic_status="needs_review", confidence=0.25,
         reason="no deterministic layer-name rule matched",
     )
 

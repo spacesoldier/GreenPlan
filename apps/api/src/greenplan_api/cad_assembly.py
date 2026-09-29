@@ -18,6 +18,7 @@ class AssemblyManifest:
     root: str
     dependencies: list[dict] = field(default_factory=list)
     skipped_overlays: list[dict] = field(default_factory=list)
+    skipped_unresolved: list[dict] = field(default_factory=list)
 
 
 def xref_insertions(document: Drawing, block_name: str) -> list[dict]:
@@ -45,6 +46,7 @@ def xref_insertions(document: Drawing, block_name: str) -> list[dict]:
 def assemble_xrefs(
     root_path: Path,
     resolve: Callable[[Path, str], Path | None],
+    skip_unresolved: Callable[[Path, str], bool] | None = None,
 ) -> tuple[Drawing, AssemblyManifest]:
     """Embed a resolved XREF graph into a copy loaded from disk.
 
@@ -79,6 +81,11 @@ def assemble_xrefs(
                 continue
             resolved = resolve(path, original)
             if resolved is None:
+                if skip_unresolved is not None and skip_unresolved(path, original):
+                    manifest.skipped_unresolved.append({
+                        "parent": str(path), "block": block.name, "path": original,
+                    })
+                    continue
                 raise XrefAssemblyError(f"unresolved XREF {block.name!r}: {original!r} in {path}")
             child = load(resolved, next_stack, root=False)
             placements = xref_insertions(document, block.name)

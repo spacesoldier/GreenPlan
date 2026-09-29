@@ -178,6 +178,23 @@ export type MasterCandidate = {
   selected: boolean;
 };
 
+export type PublicationRootCandidate = {
+  source_asset_id: string;
+  relative_path: string;
+  workspace_kind: "project_solution" | "source_data" | "archive";
+  default_role: "effective_design" | "reference_context" | "historical";
+  score: number;
+  cues: string[];
+  selected: boolean;
+  selected_role: "effective_design" | "reference_context" | "historical" | null;
+  dependency_asset_ids: string[];
+  dependency_paths: string[];
+  dependency_count: number;
+  unresolved_count: number;
+  critical_count: number;
+  closure_fingerprint: string;
+};
+
 export type CadInventory = {
   id: string;
   source_asset_id: string;
@@ -234,6 +251,9 @@ export type ClassificationSuggestion = {
   axis_results: {
     taxonomy_version?: string;
     review_required?: boolean;
+    auto_confirmed?: boolean;
+    assistant_assigned?: boolean;
+    resolution_method?: string;
     axes?: Record<string, { label: string; confidence: number; cues: string[] }>;
   };
 };
@@ -274,6 +294,7 @@ export type AssistantRun = {
 export type SemanticSuggestionJob = {
   id: string;
   source_asset_id: string;
+  scope: "selected_document";
   provider: string;
   model: string;
   state: string;
@@ -293,6 +314,7 @@ export type IntakeProjectDetail = IntakeProjectSummary & {
   stages: IntakeStage[];
   findings: FidelityFinding[];
   master_candidates: MasterCandidate[];
+  publication_roots: PublicationRootCandidate[];
   inventories: CadInventory[];
   cad_spaces: CadSpace[];
   cad_layers: CadLayer[];

@@ -13,7 +13,7 @@ from psycopg.types.json import Jsonb
 
 
 ASSISTANT_SCHEMA_VERSION = "intake-assistant-v1"
-TAXONOMY_VERSION = "cad-v1"
+TAXONOMY_VERSION = "cad-v2-sp42"
 RULES_VERSION = "rules-v2"
 
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildCadDependencyForest, buildCadWorkspaceRoots, buildDeliveryTree, cadWorkspaceKind, clampDockSplit, clampTrayHeight, clampTreeWidth, groupLayerFamilies, normalizedLayerName, wizardStepStates, xrefCandidateOptions } from "./cad-workbench";
+import { areAllCadLayersClassified, buildCadDependencyForest, buildCadWorkspaceRoots, buildDeliveryTree, cadCategoryGroups, cadCategoryLabel, cadCategoryOptions, cadWorkspaceKind, effectiveFindingSelection, hostPathParts, layerMatchesReviewMode, nextFindingSelection, clampDockSplit, clampTrayHeight, clampTreeWidth, groupLayerFamilies, normalizedLayerName, projectRelativePath, reviewableLayerSuggestionIds, newlyAssistantClassifiedSuggestionIds, toggleScopedSelection, wizardStepStates, xrefCandidateOptions } from "./cad-workbench";
 import type { CadLayer, CadXrefDependency, IntakeFile } from "./contracts";
 
 describe("CAD workbench projections", () => {
@@ -15,6 +15,92 @@ describe("CAD workbench projections", () => {
     expect(tree[0].children[0].children[0].file?.id).toBe("2");
     expect(tree[0].children[0].relativePath).toBe("Проект/XREF");
   });
+
+  it("formats a host path without the delivery root", () => {
+    expect(hostPathParts("Старый Гай/Проектное решение/DWG/head.dwg")).toEqual({ leading: ["Проектное решение"], folder: "DWG", file: "head.dwg" });
+  });
+
+  it("removes the delivery root from an inspector document path", () => {
+    expect(projectRelativePath("Старый Гай/Проектное решение/DWG/head.dwg")).toBe("Проектное решение/DWG/head.dwg");
+    expect(projectRelativePath("head.dwg")).toBe("head.dwg");
+  });
+  it("groups final classes by engineering meaning", () => {
+    expect(cadCategoryGroups.map((group) => group.label)).toEqual([
+      "Быстрый выбор", "Растительность", "Здания и сооружения", "Улицы и дорожки",
+      "Инженерные сети — точный тип", "Границы и зоны", "Рельеф",
+    ]);
+    expect(cadCategoryOptions.find(([code]) => code === "utility.unknown")?.[1]).toContain("Инженерные сети");
+  });
+
+  it("presents machine category codes as readable labels", () => {
+    expect(cadCategoryLabel("utility.unknown")).toBe("Инженерные сети · тип не уточнён");
+    expect(cadCategoryLabel("utility.power.cable")).toBe("Силовой кабель");
+    expect(cadCategoryLabel("custom.future.code")).toBe("custom.future.code");
+  });
+
+
+  it("keeps focus in the current file, then advances without jumping backwards", () => {
+    const before = [
+      { id: "previous", source_asset_id: "file-a", status: "open" },
+      { id: "current", source_asset_id: "file-b", status: "open" },
+      { id: "same-file", source_asset_id: "file-b", status: "open" },
+      { id: "next", source_asset_id: "file-c", status: "open" },
+    ];
+    expect(nextFindingSelection(before, before.filter((item) => item.id !== "current"), "current")).toBe("same-file");
+    expect(nextFindingSelection(before, before.filter((item) => !["current", "same-file"].includes(item.id)), "current")).toBe("next");
+    expect(nextFindingSelection(before, before.filter((item) => item.source_asset_id === "file-a"), "next")).toBe("");
+  });
+  it("uses the first actionable finding when no row was explicitly selected", () => {
+    const findings = [
+      { id: "first", source_asset_id: "file-a", status: "open" },
+      { id: "resolved", source_asset_id: "file-a", status: "accepted" },
+      { id: "second", source_asset_id: "file-b", status: "rejected" },
+    ];
+    expect(effectiveFindingSelection(findings, "")).toBe("first");
+    expect(effectiveFindingSelection(findings, "second")).toBe("second");
+    expect(effectiveFindingSelection(findings, "resolved")).toBe("first");
+  });
+
+
+  it("allows accepted and rejected layer suggestions to be selected again", () => {
+    const layers = [
+      { suggestion_id: "pending", review_status: "pending" },
+      { suggestion_id: "accepted", review_status: "accepted" },
+      { suggestion_id: "rejected", review_status: "rejected" },
+      { suggestion_id: "old", review_status: "superseded" },
+    ] as CadLayer[];
+    expect(reviewableLayerSuggestionIds(layers)).toEqual(["pending", "accepted", "rejected"]);
+  });
+  it("marks only non-empty documents with every layer classified as ready", () => {
+    expect(areAllCadLayersClassified([])).toBe(false);
+    expect(areAllCadLayersClassified([{ mapping_status: "confirmed" }, { mapping_status: "confirmed" }] as CadLayer[])).toBe(true);
+    expect(areAllCadLayersClassified([{ mapping_status: "confirmed" }, { mapping_status: "candidate" }] as CadLayer[])).toBe(false);
+  });
+  it("selects or clears only the layers in the visible scope", () => {
+    expect(toggleScopedSelection(["outside", "a"], ["a", "b"], true)).toEqual(["outside", "a", "b"]);
+    expect(toggleScopedSelection(["outside", "a", "b"], ["a", "b"], false)).toEqual(["outside"]);
+  });
+  it("finds only fresh assistant confirmations for departure animation", () => {
+    const previous = [
+      { id: "layer-a", suggestion_id: "suggestion-a", mapping_status: "candidate", axis_results: {} },
+      { id: "layer-b", suggestion_id: "suggestion-b", mapping_status: "confirmed", axis_results: {} },
+    ] as CadLayer[];
+    const next = [
+      { id: "layer-a", suggestion_id: "new-suggestion-a", mapping_status: "confirmed", axis_results: { assistant_assigned: true } },
+      { id: "layer-b", suggestion_id: "suggestion-b", mapping_status: "confirmed", axis_results: { assistant_assigned: true } },
+    ] as CadLayer[];
+    expect(newlyAssistantClassifiedSuggestionIds(previous, next)).toEqual(["suggestion-a"]);
+  });
+  it("filters unknown and engineer-reviewed layers without disabling reselection", () => {
+    const unknown = { suggested_category: "unknown", review_status: "pending", mapping_status: "candidate" } as CadLayer;
+    const suggested = { suggested_category: "utility.unknown", review_status: "pending", mapping_status: "candidate" } as CadLayer;
+    const reviewed = { suggested_category: "utility.unknown", review_status: "accepted", mapping_status: "confirmed" } as CadLayer;
+    expect(layerMatchesReviewMode(unknown, "unknown")).toBe(true);
+    expect(layerMatchesReviewMode(suggested, "unknown")).toBe(true);
+    expect(layerMatchesReviewMode(reviewed, "reviewed")).toBe(true);
+    expect(layerMatchesReviewMode(suggested, "reviewed")).toBe(false);
+  });
+
 
   it("groups only normalized names with the same entity signature", () => {
     const base = { entity_types: { LINE: 2 }, name: "Кабель  связи" } as unknown as CadLayer;

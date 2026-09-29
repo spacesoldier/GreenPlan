@@ -19,14 +19,16 @@ from psycopg.types.json import Jsonb
 from .dxf_ingest import iter_primitives
 from .dxf_ingest import classify_layer
 from .classification import classify_delivery_path, needs_model_assist
-from .cad_assembly import assemble_xrefs, delivery_xref_resolver, xref_insertions
+from .cad_assembly import XrefAssemblyError, assemble_xrefs, delivery_xref_resolver, xref_insertions
 from .decision_models import DecisionProviderError, laya_delivery_role
 from .import_pilots import PilotSpec, ingest_geometry
 from .semantic_taxonomy import classify_layer_axes, feature_snapshot
+from .publication_roots import PUBLICATION_ROOT_ROLES, root_candidates
 
 
 DWG_SIGNATURE = re.compile(rb"^AC\d{4}$")
 DXF_BINARY_SIGNATURE = b"AutoCAD Binary DXF"
+MIN_VALUABLE_FILE_BYTES = 10 * 1024
 
 
 class IntakeConflict(RuntimeError):
@@ -49,6 +51,32 @@ def safe_archive_member(raw: str) -> str | None:
 def _is_archive_path(value: str) -> bool:
     parts = value.replace("\\", "/").casefold().replace("ё", "е").split("/")[:-1]
     return any("архив" in part or "archive" in part for part in parts)
+
+def descendant_matches(source_path: str, matches: list[str]) -> list[str]:
+    """Keep XREF candidates located in subdirectories below the host directory."""
+    source_dir = PurePosixPath(source_path.replace("\\", "/")).parent
+    nested: list[str] = []
+    for match in matches:
+        candidate_parent = PurePosixPath(match.replace("\\", "/")).parent
+        if len(candidate_parent.parts) <= len(source_dir.parts):
+            continue
+        if candidate_parent.parts[:len(source_dir.parts)] == source_dir.parts:
+            nested.append(match)
+    return nested
+
+
+FIDELITY_METRIC_FIELDS = ("entity_count", "layer_count", "layout_count", "hatch_count")
+
+
+def compare_inventory_metrics(source: dict, converted: dict) -> dict:
+    """Compare only metrics independently available on both sides."""
+    checked = [key for key in FIDELITY_METRIC_FIELDS if source.get(key) is not None and converted.get(key) is not None]
+    differences = {
+        key: {"source": source[key], "converted": converted[key]}
+        for key in checked if source[key] != converted[key]
+    }
+    return {"comparable": bool(checked), "checked_fields": checked, "differences": differences}
+
 
 def _expand_nested_zip_archives(cursor, revision_id: UUID, delivery_id: UUID, root: Path) -> None:
     cursor.execute(
@@ -480,10 +508,11 @@ def _record_dxf_inventory(cursor, revision_id: UUID, asset: dict, root: Path, st
     try:
         metrics = dxf_inventory(path)
         cursor.execute(
-            """SELECT source_asset_id,relative_path FROM intake.delivery_entries de
+            """SELECT de.source_asset_id,de.relative_path FROM intake.delivery_entries de
+               JOIN provenance.source_assets sa ON sa.id=de.source_asset_id
                JOIN intake.project_workflows pw ON pw.delivery_id=de.delivery_id
-               WHERE pw.revision_id=%s""",
-            (revision_id,),
+               WHERE pw.revision_id=%s AND sa.size_bytes>%s""",
+            (revision_id, MIN_VALUABLE_FILE_BYTES),
         )
         delivery_rows = cursor.fetchall()
         delivery_paths = [row["relative_path"] for row in delivery_rows]
@@ -502,10 +531,15 @@ def _record_dxf_inventory(cursor, revision_id: UUID, asset: dict, root: Path, st
             basename_matches = delivery_names.get(PurePosixPath(raw_path).name.casefold(), []) if raw_path else []
             matches = [exact] if exact else basename_matches
             matches = [value for value in matches if value]
+            contextual = [] if exact else descendant_matches(parent_path, matches)
+            if contextual:
+                matches = contextual
+            resolution_method = "exact_path" if exact else "host_descendant" if contextual else "basename"
             resolution = "resolved" if len(matches) == 1 else "missing" if not matches else "ambiguous"
             resolved_xrefs.append({
                 **xref,
                 "resolution": resolution,
+                "resolution_method": resolution_method,
                 "matches": matches,
                 "referenced_asset_id": str(asset_by_path[matches[0]]) if resolution == "resolved" else None,
             })
@@ -571,7 +605,7 @@ def _record_dxf_inventory(cursor, revision_id: UUID, asset: dict, root: Path, st
             (
                 cad_document_id, referenced_id, xref_item.get("name") or xref_item.get("path") or "unnamed",
                 xref_item.get("path"), xref_item.get("resolution", "missing"),
-                Jsonb({"overlay": xref_item.get("overlay", False), "placements": xref_item.get("placements", []), "matches": xref_item.get("matches", [])}),
+                Jsonb({"overlay": xref_item.get("overlay", False), "placements": xref_item.get("placements", []), "matches": xref_item.get("matches", []), "resolution_method": xref_item.get("resolution_method")}),
             ),
         )
     for layer_name, entity_count in metrics.get("layer_entity_counts", {}).items():
@@ -753,6 +787,13 @@ def analyze_revision(database_url: str, intake_root: Path, project_id: UUID, bro
         )
         assets = cursor.fetchall()
         for asset in assets:
+            if asset["size_bytes"] <= MIN_VALUABLE_FILE_BYTES:
+                cursor.execute(
+                    """UPDATE intake.delivery_entries SET role='service_noise',cues=%s
+                       WHERE delivery_id=%s AND source_asset_id=%s""",
+                    (Jsonb(["file size is at most 10 KiB"]), workflow["delivery_id"], asset["id"]),
+                )
+                continue
             detected = asset["properties"].get("detected_format", "unknown")
             suggestion = classify_delivery_path(asset["relative_path"], detected)
             laya_url = os.getenv("LAYA_URL")
@@ -944,12 +985,35 @@ def refresh_workflow(database_url: str, intake_root: Path, project_id: UUID) -> 
         )
 
 
+def _load_publication_candidates(cursor, revision_id: UUID) -> list[dict]:
+    cursor.execute(
+        """SELECT mc.source_asset_id,de.relative_path,de.role AS delivery_role,
+                  mc.score::float8 AS score,mc.role,mc.cues
+           FROM intake.master_candidates mc
+           JOIN intake.project_workflows pw ON pw.revision_id=mc.revision_id
+           JOIN intake.delivery_entries de ON de.delivery_id=pw.delivery_id
+                                          AND de.source_asset_id=mc.source_asset_id
+           WHERE mc.revision_id=%s""",
+        (revision_id,),
+    )
+    documents = cursor.fetchall()
+    cursor.execute(
+        """SELECT cd.source_asset_id,cx.referenced_asset_id,cx.resolved_status AS status
+           FROM intake.cad_xrefs cx
+           JOIN intake.cad_documents cd ON cd.id=cx.cad_document_id
+           WHERE cd.source_asset_id=ANY(%s::uuid[])""",
+        ([item["source_asset_id"] for item in documents],),
+    )
+    return root_candidates(documents, cursor.fetchall())
+
+
 def review_revision(
     database_url: str,
     project_id: UUID,
     decision: str,
     comment: str,
     selected_master_asset_id: UUID | None,
+    publication_roots: list[dict] | None = None,
 ) -> tuple[UUID, str, str | None]:
     with _connect(database_url) as connection, connection.cursor() as cursor:
         cursor.execute(
@@ -968,25 +1032,73 @@ def review_revision(
                 (comment, row["revision_id"]),
             )
             return row["revision_id"], "blocked", row["fidelity_verdict"]
-        if row["fidelity_verdict"] in {"rejected", None}:
-            raise IntakeConflict("this revision cannot be accepted until critical findings are resolved")
-        if selected_master_asset_id is None:
+
+        candidates = _load_publication_candidates(cursor, row["revision_id"])
+        by_id = {str(item["source_asset_id"]): item for item in candidates}
+        requested = list(publication_roots or [])
+        if not requested and selected_master_asset_id is not None:
+            requested = [{"source_asset_id": selected_master_asset_id, "role": "effective_design"}]
+        if not requested and candidates:
+            preferred = next((item for item in candidates if item["workspace_kind"] == "project_solution"), candidates[0])
+            requested = [{"source_asset_id": preferred["source_asset_id"], "role": preferred["default_role"]}]
+        if not requested:
+            raise IntakeConflict("no CAD publication root is available")
+
+        normalized: list[tuple[dict, str]] = []
+        seen: set[str] = set()
+        for selection in requested:
+            source_id = str(selection["source_asset_id"])
+            role = str(selection["role"])
+            candidate = by_id.get(source_id)
+            if candidate is None:
+                raise IntakeConflict(f"asset {source_id} is not a publication root")
+            if source_id in seen:
+                raise IntakeConflict(f"publication root {source_id} is duplicated")
+            if role not in PUBLICATION_ROOT_ROLES:
+                raise IntakeConflict(f"unsupported publication root role: {role}")
+            if int(candidate["unresolved_count"]) > 0:
+                raise IntakeConflict(f"publication root {candidate['relative_path']} has unresolved XREF dependencies")
+            seen.add(source_id)
+            normalized.append((candidate, role))
+        if not any(role == "effective_design" for _candidate, role in normalized):
+            raise IntakeConflict("at least one effective design root is required")
+
+        closure_ids = sorted({
+            str(asset_id)
+            for candidate, _role in normalized
+            for asset_id in [candidate["source_asset_id"], *candidate["dependency_asset_ids"]]
+        })
+        cursor.execute(
+            """SELECT count(*) AS count FROM intake.fidelity_findings
+               WHERE revision_id=%s AND severity='critical' AND status='open'
+                 AND (source_asset_id IS NULL OR source_asset_id=ANY(%s::uuid[]))""",
+            (row["revision_id"], closure_ids),
+        )
+        if int(cursor.fetchone()["count"]) > 0:
+            raise IntakeConflict("selected publication roots contain unresolved critical findings")
+
+        cursor.execute("DELETE FROM intake.publication_roots WHERE revision_id=%s", (row["revision_id"],))
+        for position, (candidate, role) in enumerate(normalized):
             cursor.execute(
-                """SELECT source_asset_id FROM intake.master_candidates WHERE revision_id=%s
-                   ORDER BY score DESC,source_asset_id LIMIT 1""",
-                (row["revision_id"],),
+                """INSERT INTO intake.publication_roots(
+                       revision_id,source_asset_id,root_role,position,closure_fingerprint)
+                   VALUES (%s,%s,%s,%s,%s)""",
+                (row["revision_id"], candidate["source_asset_id"], role, position, candidate["closure_fingerprint"]),
             )
-            candidate = cursor.fetchone()
-            selected_master_asset_id = candidate["source_asset_id"] if candidate else None
-        if selected_master_asset_id is None:
-            raise IntakeConflict("no CAD master candidate is available")
-        cursor.execute("UPDATE intake.master_candidates SET selected=(source_asset_id=%s) WHERE revision_id=%s", (selected_master_asset_id, row["revision_id"]))
-        accepted_verdict = "accepted_with_review" if row["fidelity_verdict"] == "not_comparable" else "accepted"
+        selected_ids = [candidate["source_asset_id"] for candidate, _role in normalized]
+        cursor.execute(
+            "UPDATE intake.master_candidates SET selected=(source_asset_id=ANY(%s::uuid[])) WHERE revision_id=%s",
+            (selected_ids, row["revision_id"]),
+        )
+        compatibility_master = next(
+            candidate["source_asset_id"] for candidate, role in normalized if role == "effective_design"
+        )
+        accepted_verdict = "accepted" if row["fidelity_verdict"] == "accepted" else "accepted_with_review"
         cursor.execute(
             """UPDATE intake.project_workflows SET state='ready_to_publish',fidelity_verdict=%s,
                    selected_master_asset_id=%s,review_comment=%s,updated_at=now()
                WHERE revision_id=%s""",
-            (accepted_verdict, selected_master_asset_id, comment, row["revision_id"]),
+            (accepted_verdict, compatibility_master, comment, row["revision_id"]),
         )
         return row["revision_id"], "ready_to_publish", accepted_verdict
 
@@ -1153,6 +1265,115 @@ def review_classifications_batch(
         return batch_id
 
 
+
+def _rerun_fidelity_comparison(cursor, revision_id: UUID, source_asset_id: UUID) -> dict:
+    cursor.execute(
+        """SELECT stage,parse_status,metrics FROM intake.cad_inventories
+           WHERE revision_id=%s AND source_asset_id=%s
+           ORDER BY CASE stage WHEN 'direct_reader' THEN 0 WHEN 'source' THEN 1
+                               WHEN 'converted_dxf' THEN 2 ELSE 3 END""",
+        (revision_id, source_asset_id),
+    )
+    inventories = cursor.fetchall()
+    source = next((row for row in inventories if row["stage"] in {"direct_reader", "source"}), None)
+    converted = next((row for row in inventories if row["stage"] == "converted_dxf"), None)
+    comparison = compare_inventory_metrics(
+        (source or {}).get("metrics") or {}, (converted or {}).get("metrics") or {},
+    )
+    cursor.execute(
+        """SELECT count(*) AS total,
+                  count(*) FILTER (WHERE cx.resolved_status IN ('resolved','ignored')) AS resolved,
+                  count(*) FILTER (WHERE cx.resolved_status NOT IN ('resolved','ignored')) AS unresolved
+           FROM intake.cad_xrefs cx
+           JOIN intake.cad_documents cd ON cd.id=cx.cad_document_id
+           WHERE cd.source_asset_id=%s""",
+        (source_asset_id,),
+    )
+    xrefs = cursor.fetchone()
+    comparison.update({
+        "source_stage": source["stage"] if source else None,
+        "source_parse_status": source["parse_status"] if source else None,
+        "converted_stage": converted["stage"] if converted else None,
+        "xref_total": xrefs["total"],
+        "xref_resolved": xrefs["resolved"],
+        "xref_unresolved": xrefs["unresolved"],
+        "trigger": "xref_resolution",
+    })
+    passed = bool(comparison["comparable"] and not comparison["differences"] and not xrefs["unresolved"])
+    state = "completed" if passed else "completed_with_warnings"
+    if passed:
+        detail = "Повторное сравнение после разрешения XREF завершено: доступные метрики DWG и DXF совпали."
+    elif comparison["differences"]:
+        detail = "Повторное сравнение после разрешения XREF обнаружило расхождения в доступных метриках DWG и DXF."
+    else:
+        detail = "Повторное сравнение после разрешения XREF выполнено, но независимых метрик исходного DWG всё ещё недостаточно."
+    cursor.execute(
+        """UPDATE intake.fidelity_findings
+           SET status=CASE WHEN %s THEN 'resolved' ELSE status END,
+               detail=%s,evidence=evidence||%s
+           WHERE revision_id=%s AND source_asset_id=%s
+             AND code='independent_pre_inventory_incomplete' AND status='open'""",
+        (passed, detail, Jsonb({"xref_triggered_recheck": comparison}), revision_id, source_asset_id),
+    )
+    cursor.execute(
+        """INSERT INTO intake.processing_stage_attempts(
+               revision_id,source_asset_id,stage,attempt_no,state,progress,metrics,started_at,finished_at)
+           VALUES (%s,%s,'fidelity_recheck',
+                   COALESCE((SELECT max(attempt_no)+1 FROM intake.processing_stage_attempts
+                             WHERE revision_id=%s AND source_asset_id=%s AND stage='fidelity_recheck'),1),
+                   %s,1,%s,now(),now()) RETURNING id""",
+        (revision_id, source_asset_id, revision_id, source_asset_id, state, Jsonb(comparison)),
+    )
+    attempt_id = cursor.fetchone()["id"]
+    return {"state": state, "passed": passed, "attempt_id": str(attempt_id), **comparison}
+
+def _revalidate_source_after_resolution(cursor, revision_id: UUID, source_asset_id: UUID | None) -> dict:
+    if source_asset_id is None:
+        return {"source_complete": False, "remaining_issues": 0, "revalidation_state": None}
+    cursor.execute(
+        """SELECT count(*) AS remaining FROM intake.fidelity_findings
+           WHERE revision_id=%s AND source_asset_id=%s AND status='open' AND code LIKE 'xref_%%'""",
+        (revision_id, source_asset_id),
+    )
+    remaining = cursor.fetchone()["remaining"]
+    if remaining:
+        return {"source_complete": False, "remaining_issues": remaining, "revalidation_state": None}
+    cursor.execute(
+        """SELECT count(*) FILTER (WHERE cx.resolved_status NOT IN ('resolved','ignored')) AS unresolved
+           FROM intake.cad_xrefs cx
+           JOIN intake.cad_documents cd ON cd.id=cx.cad_document_id
+           WHERE cd.source_asset_id=%s""",
+        (source_asset_id,),
+    )
+    unresolved = cursor.fetchone()["unresolved"]
+    state = "completed_with_warnings" if unresolved else "completed"
+    cursor.execute(
+        """INSERT INTO intake.processing_stage_attempts(
+               revision_id,source_asset_id,stage,attempt_no,state,progress,metrics,started_at,finished_at)
+           VALUES (%s,%s,'xref_resolution',
+                   COALESCE((SELECT max(attempt_no)+1 FROM intake.processing_stage_attempts
+                             WHERE revision_id=%s AND source_asset_id=%s AND stage='xref_resolution'),1),
+                   %s,1,%s,now(),now()) RETURNING id""",
+        (revision_id, source_asset_id, revision_id, source_asset_id, state,
+         Jsonb({"rerun_scope": "source_file", "unresolved_edges": unresolved})),
+    )
+    attempt_id = cursor.fetchone()["id"]
+    fidelity_recheck = _rerun_fidelity_comparison(cursor, revision_id, source_asset_id)
+    workflow_state, verdict = _resolve_verdict(cursor, revision_id)
+    cursor.execute(
+        """UPDATE intake.project_workflows SET state=%s,fidelity_verdict=%s,updated_at=now()
+           WHERE revision_id=%s AND state NOT IN ('ready_to_publish','published','retired')""",
+        (workflow_state, verdict, revision_id),
+    )
+    cursor.execute(
+        """INSERT INTO audit.events(action,entity_schema,entity_table,entity_id,metadata)
+           VALUES ('revalidate_xref_source','provenance','source_assets',%s,%s)""",
+        (source_asset_id, Jsonb({"attempt_id": str(attempt_id), "state": state, "unresolved_edges": unresolved})),
+    )
+    return {"source_complete": True, "remaining_issues": 0, "revalidation_state": state,
+            "attempt_id": str(attempt_id), "fidelity_recheck": fidelity_recheck}
+
+
 def resolve_finding(
     database_url: str, project_id: UUID, finding_id: UUID, action: str, reason: str,
 ) -> dict:
@@ -1173,6 +1394,16 @@ def resolve_finding(
             "revision_scoped": True,
         }
         cursor.execute("UPDATE intake.fidelity_findings SET status=%s WHERE id=%s", (status, finding_id))
+        if action == "waive" and finding["code"] in {"xref_missing", "xref_ambiguous"}:
+            xref = (finding["evidence"] or {}).get("xref") or {}
+            cursor.execute(
+                """UPDATE intake.cad_xrefs cx SET resolved_status='ignored',properties=cx.properties||%s
+                   FROM intake.cad_documents cd
+                   WHERE cx.cad_document_id=cd.id AND cd.source_asset_id=%s
+                     AND (cx.original_path=%s OR cx.reference_name=%s)""",
+                (Jsonb({"resolution_method": "revision_waiver"}), finding["source_asset_id"],
+                 xref.get("path"), xref.get("name")),
+            )
         cursor.execute(
             """INSERT INTO intake.finding_resolutions(finding_id,project_id,action,reason,impact)
                VALUES (%s,%s,%s,%s,%s) RETURNING id,created_at""",
@@ -1184,7 +1415,10 @@ def resolve_finding(
                VALUES ('finding_resolution','intake','fidelity_findings',%s,%s)""",
             (finding_id, Jsonb({"action": action, "reason": reason, "impact": impact})),
         )
-        return {"id": str(resolution["id"]), "status": status, "action": action, "impact": impact}
+        revalidation = _revalidate_source_after_resolution(
+            cursor, finding["revision_id"], finding["source_asset_id"],
+        ) if action == "waive" else {"source_complete": False, "remaining_issues": None, "revalidation_state": None}
+        return {"id": str(resolution["id"]), "status": status, "action": action, "impact": impact, **revalidation}
 
 
 def resolve_xref_target(
@@ -1193,7 +1427,7 @@ def resolve_xref_target(
     with _connect(database_url) as connection, connection.cursor() as cursor:
         cursor.execute(
             """SELECT cx.id,cx.reference_name,cx.original_path,cx.resolved_status,cx.properties,
-                      cd.source_asset_id,source.relative_path AS source_relative_path,
+                      revision.id AS revision_id,cd.source_asset_id,source.relative_path AS source_relative_path,
                       target.source_asset_id AS target_asset_id,target.relative_path AS target_relative_path
                FROM intake.cad_xrefs cx
                JOIN intake.cad_documents cd ON cd.id=cx.cad_document_id
@@ -1215,9 +1449,9 @@ def resolve_xref_target(
         if _is_archive_path(row["source_relative_path"]) and not _is_archive_path(row["target_relative_path"]):
             raise IntakeConflict("an XREF hosted in an archive may only target another archive file")
         cursor.execute(
-            """UPDATE intake.cad_xrefs
+            """UPDATE intake.cad_xrefs cx
                SET referenced_asset_id=%s,resolved_status='resolved',
-                   properties=properties||%s
+                   properties=cx.properties||%s
                WHERE id=%s""",
             (target_asset_id, Jsonb({"resolution_method": "manual", "selected_path": row["target_relative_path"]}), xref_id),
         )
@@ -1241,25 +1475,52 @@ def resolve_xref_target(
                 "method": "manual",
             })),
         )
-        return {"xref_id": str(xref_id), "status": "resolved", "target_asset_id": str(target_asset_id), "target_relative_path": row["target_relative_path"]}
+        revalidation = _revalidate_source_after_resolution(cursor, row["revision_id"], row["source_asset_id"])
+        return {"xref_id": str(xref_id), "status": "resolved", "target_asset_id": str(target_asset_id),
+                "target_relative_path": row["target_relative_path"], **revalidation}
 
 
 def publish_revision(database_url: str, intake_root: Path, project_id: UUID) -> UUID:
     with _connect(database_url) as connection, connection.cursor() as cursor:
         cursor.execute(
-            """SELECT p.code,p.title,pr.id AS revision_id,pw.selected_master_asset_id,
-                      sa.storage_locator,sa.sha256,sa.properties
+            """SELECT p.code,p.title,pr.id AS revision_id,pw.selected_master_asset_id
                FROM catalog.projects p
                JOIN LATERAL (SELECT value.* FROM catalog.project_revisions value
                  WHERE value.project_id=p.id ORDER BY revision_no DESC LIMIT 1) pr ON true
                JOIN intake.project_workflows pw ON pw.revision_id=pr.id
-               JOIN provenance.source_assets sa ON sa.id=pw.selected_master_asset_id
                WHERE p.id=%s AND pw.state='ready_to_publish'""",
             (project_id,),
         )
         row = cursor.fetchone()
         if row is None:
             raise IntakeConflict("revision is not ready to publish")
+
+        cursor.execute(
+            """SELECT publication.source_asset_id,publication.root_role,publication.position,
+                      publication.closure_fingerprint,de.relative_path,sa.sha256
+               FROM intake.publication_roots publication
+               JOIN intake.project_workflows pw ON pw.revision_id=publication.revision_id
+               JOIN intake.delivery_entries de ON de.delivery_id=pw.delivery_id
+                                              AND de.source_asset_id=publication.source_asset_id
+               JOIN provenance.source_assets sa ON sa.id=publication.source_asset_id
+               WHERE publication.revision_id=%s ORDER BY publication.position""",
+            (row["revision_id"],),
+        )
+        selected_roots = cursor.fetchall()
+        if not selected_roots and row["selected_master_asset_id"] is not None:
+            cursor.execute(
+                """SELECT sa.id AS source_asset_id,'effective_design' AS root_role,0 AS position,
+                          NULL AS closure_fingerprint,de.relative_path,sa.sha256
+                   FROM provenance.source_assets sa
+                   JOIN intake.project_workflows pw ON pw.revision_id=%s
+                   JOIN intake.delivery_entries de ON de.delivery_id=pw.delivery_id AND de.source_asset_id=sa.id
+                   WHERE sa.id=%s""",
+                (row["revision_id"], row["selected_master_asset_id"]),
+            )
+            selected_roots = cursor.fetchall()
+        if not selected_roots:
+            raise IntakeConflict("no publication roots were selected")
+
         cursor.execute(
             """SELECT DISTINCT ON (ci.source_asset_id)
                       ci.source_asset_id,ci.artifact_locator,de.relative_path
@@ -1274,30 +1535,97 @@ def publish_revision(database_url: str, intake_root: Path, project_id: UUID) -> 
             (row["revision_id"],),
         )
         inventory_rows = cursor.fetchall()
-        inventory = next((item for item in inventory_rows if item["source_asset_id"] == row["selected_master_asset_id"]), None)
-        if inventory is None:
-            raise IntakeConflict("selected master has no parsed DXF representation")
+        inventory_by_asset = {item["source_asset_id"]: item for item in inventory_rows}
         intake_root = intake_root.resolve()
-        primary = (intake_root / inventory["artifact_locator"]).resolve()
-        if intake_root.resolve() not in primary.parents or not primary.is_file():
-            raise FileNotFoundError(primary)
         path_map: dict[str, Path] = {}
         logical_by_file: dict[Path, str] = {}
+        asset_by_file: dict[Path, UUID] = {}
+        physical_by_asset: dict[UUID, Path] = {}
         for item in inventory_rows:
             physical = (intake_root / item["artifact_locator"]).resolve()
             if intake_root not in physical.parents or not physical.is_file():
                 continue
             path_map[item["relative_path"]] = physical
             logical_by_file[physical] = item["relative_path"]
-        assembled_doc, assembly_manifest = assemble_xrefs(
-            primary,
-            delivery_xref_resolver(path_map, logical_by_file),
+            asset_by_file[physical] = item["source_asset_id"]
+            physical_by_asset[item["source_asset_id"]] = physical
+
+        def decision_key(source_asset_id: UUID, original_path: str) -> tuple[UUID, str]:
+            return source_asset_id, original_path.replace("\\", "/").strip().casefold()
+
+        cursor.execute(
+            """SELECT cd.source_asset_id,cx.original_path,cx.referenced_asset_id,cx.resolved_status
+               FROM intake.cad_xrefs cx
+               JOIN intake.cad_documents cd ON cd.id=cx.cad_document_id
+               WHERE cd.source_asset_id=ANY(%s::uuid[])""",
+            (list(inventory_by_asset),),
         )
+        xref_overrides: dict[tuple[UUID, str], Path | None] = {}
+        for decision in cursor.fetchall():
+            if decision["resolved_status"] != "resolved":
+                continue
+            key = decision_key(decision["source_asset_id"], decision["original_path"] or "")
+            xref_overrides[key] = physical_by_asset.get(decision["referenced_asset_id"])
+
+        cursor.execute(
+            """SELECT source_asset_id,evidence->'xref'->>'path' AS original_path
+               FROM intake.fidelity_findings
+               WHERE revision_id=%s AND code IN ('xref_missing','xref_ambiguous')
+                 AND status='accepted'""",
+            (row["revision_id"],),
+        )
+        waived_xrefs = {
+            decision_key(item["source_asset_id"], item["original_path"] or "")
+            for item in cursor.fetchall() if item["source_asset_id"] is not None
+        }
+        fallback_xref_resolver = delivery_xref_resolver(path_map, logical_by_file)
+
+        def publication_xref_resolver(parent_file: Path, original_path: str) -> Path | None:
+            source_asset_id = asset_by_file.get(parent_file.resolve())
+            key = decision_key(source_asset_id, original_path) if source_asset_id is not None else None
+            if key is not None and key in xref_overrides:
+                return xref_overrides[key]
+            return fallback_xref_resolver(parent_file, original_path)
+
+        def publication_xref_is_waived(parent_file: Path, original_path: str) -> bool:
+            source_asset_id = asset_by_file.get(parent_file.resolve())
+            return source_asset_id is not None and decision_key(source_asset_id, original_path) in waived_xrefs
         assembly_dir = intake_root / "assemblies" / str(row["revision_id"])
         assembly_dir.mkdir(parents=True, exist_ok=True)
-        assembled_path = assembly_dir / "assembled.dxf"
-        assembled_doc.saveas(assembled_path)
-        assembled_sha = file_sha256(assembled_path)
+        root_assemblies: list[dict] = []
+        for selected in selected_roots:
+            inventory = inventory_by_asset.get(selected["source_asset_id"])
+            if inventory is None:
+                raise IntakeConflict(f"publication root {selected['relative_path']} has no parsed DXF representation")
+            primary = (intake_root / inventory["artifact_locator"]).resolve()
+            if intake_root not in primary.parents or not primary.is_file():
+                raise FileNotFoundError(primary)
+            try:
+                assembled_doc, manifest = assemble_xrefs(
+                    primary, publication_xref_resolver, publication_xref_is_waived,
+                )
+            except XrefAssemblyError as exc:
+                raise IntakeConflict(str(exc)) from exc
+            root_dir = assembly_dir / str(selected["source_asset_id"])
+            root_dir.mkdir(parents=True, exist_ok=True)
+            assembled_path = root_dir / "assembled.dxf"
+            assembled_doc.saveas(assembled_path)
+            root_assemblies.append({
+                "source_asset_id": selected["source_asset_id"],
+                "relative_path": selected["relative_path"],
+                "root_role": selected["root_role"],
+                "closure_fingerprint": selected["closure_fingerprint"],
+                "source_sha256": selected["sha256"],
+                "assembled_path": assembled_path,
+                "assembled_sha256": file_sha256(assembled_path),
+                "manifest": manifest,
+            })
+
+        publication_fingerprint = sha256(json.dumps([
+            {"source_asset_id": str(item["source_asset_id"]), "role": item["root_role"],
+             "source_sha256": item["source_sha256"], "assembled_sha256": item["assembled_sha256"]}
+            for item in root_assemblies
+        ], ensure_ascii=False, sort_keys=True).encode()).hexdigest()
         territory_id = uuid4()
         coordinate_id = uuid4()
         model_id = uuid4()
@@ -1311,41 +1639,63 @@ def publish_revision(database_url: str, intake_root: Path, project_id: UUID) -> 
         cursor.execute(
             """INSERT INTO catalog.coordinate_spaces(id,code,kind,linear_unit,status,axis_definition)
                VALUES (%s,%s,'cad_local','unknown','candidate',%s)""",
-            (coordinate_id, f"{territory_code}-cad-local", Jsonb({"origin": "intake_dxf"})),
+            (coordinate_id, f"{territory_code}-cad-local", Jsonb({"origin": "intake_multi_root_dxf"})),
         )
+        root_manifest = [{
+            "source_asset_id": str(item["source_asset_id"]),
+            "relative_path": item["relative_path"],
+            "role": item["root_role"],
+            "closure_fingerprint": item["closure_fingerprint"],
+            "source_sha256": item["source_sha256"],
+            "assembled_sha256": item["assembled_sha256"],
+            "assembly_locator": item["assembled_path"].relative_to(intake_root).as_posix(),
+            "dependencies": item["manifest"].dependencies,
+            "skipped_overlays": item["manifest"].skipped_overlays,
+            "skipped_unresolved": item["manifest"].skipped_unresolved,
+        } for item in root_assemblies]
         cursor.execute(
             """INSERT INTO catalog.canonical_models(
                    id,project_revision_id,territory_id,coordinate_space_id,model_kind,version_no,
                    assembly_status,dependency_completeness,semantic_coverage,properties)
                VALUES (%s,%s,%s,%s,'combined',1,'needs_review',1,0,%s)""",
-            (
-                model_id, row["revision_id"], territory_id, coordinate_id,
-                Jsonb({
-                    "intake_publish": True,
-                    "source_sha256": row["sha256"],
-                    "assembled_sha256": assembled_sha,
-                    "assembly_locator": assembled_path.relative_to(intake_root).as_posix(),
-                    "assembly_manifest": {
-                        "root": assembly_manifest.root,
-                        "dependencies": assembly_manifest.dependencies,
-                        "skipped_overlays": assembly_manifest.skipped_overlays,
-                    },
-                }),
-            ),
+            (model_id, row["revision_id"], territory_id, coordinate_id, Jsonb({
+                "intake_publish": True, "publication_mode": "multi_root_v1",
+                "publication_fingerprint": publication_fingerprint, "roots": root_manifest,
+            })),
         )
+
+        aggregate = {"source_entities": 0, "imported_geometries": 0, "layers": 0, "known_geometries": 0}
         ids = {"model": model_id}
-        stats = ingest_geometry(
-            connection,
-            PilotSpec(code=row["code"], title=row["title"], directory="", primary_dxf=""),
-            assembled_path,
-            ids,
-            row["selected_master_asset_id"],
-            0,
+        for item in root_assemblies:
+            stats = ingest_geometry(
+                connection, PilotSpec(code=row["code"], title=row["title"], directory="", primary_dxf=""),
+                item["assembled_path"], ids, item["source_asset_id"], 0,
+                identity_scope=str(item["source_asset_id"]),
+                object_context={
+                    "publication_root_id": str(item["source_asset_id"]),
+                    "publication_root_role": item["root_role"],
+                    "publication_root_path": item["relative_path"],
+                },
+                refresh_derived=False,
+            )
+            for key in aggregate:
+                aggregate[key] += int(stats[key])
+        coverage = aggregate["known_geometries"] / aggregate["imported_geometries"] if aggregate["imported_geometries"] else 0
+        cursor.execute(
+            """UPDATE catalog.canonical_models SET semantic_coverage=%s,properties=properties || %s
+               WHERE id=%s""",
+            (coverage, Jsonb({
+                "source_entity_count": aggregate["source_entities"],
+                "imported_geometry_count": aggregate["imported_geometries"],
+                "publication_root_count": len(root_assemblies),
+            }), model_id),
         )
+        cursor.execute("SELECT geo.refresh_model_spatial_focus(%s)", (model_id,))
+        cursor.execute("SELECT geo.refresh_model_render_assemblies(%s)", (model_id,))
         cursor.execute("UPDATE catalog.projects SET status='active',updated_at=now() WHERE id=%s", (project_id,))
         cursor.execute(
             "UPDATE catalog.project_revisions SET status='interpreted',content_fingerprint=%s WHERE id=%s",
-            (row["sha256"], row["revision_id"]),
+            (publication_fingerprint, row["revision_id"]),
         )
         cursor.execute(
             "UPDATE intake.project_workflows SET state='published',published_at=now(),updated_at=now() WHERE revision_id=%s",
@@ -1354,7 +1704,10 @@ def publish_revision(database_url: str, intake_root: Path, project_id: UUID) -> 
         cursor.execute(
             """INSERT INTO audit.events(action,entity_schema,entity_table,entity_id,after_digest,metadata)
                VALUES ('publish','catalog','canonical_models',%s,%s,%s)""",
-            (model_id, assembled_sha, Jsonb({**stats, "xref_dependencies": len(assembly_manifest.dependencies)})),
+            (model_id, publication_fingerprint, Jsonb({
+                **aggregate, "publication_roots": len(root_assemblies),
+                "xref_dependencies": sum(len(item["manifest"].dependencies) for item in root_assemblies),
+            })),
         )
         connection.commit()
         return model_id

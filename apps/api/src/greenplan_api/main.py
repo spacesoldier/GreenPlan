@@ -55,6 +55,7 @@ from .intake_service import (
 from .delivery_delete import remove_delivery_path
 from .assistant import create_or_resume_run, execute_run, reconcile_project_runs
 from .semantic_jobs import (
+    NoUnclassifiedLayers,
     create_semantic_suggestion_job,
     enqueue_semantic_suggestion_job,
     get_semantic_suggestion_job,
@@ -326,6 +327,7 @@ def create_app(repository: Repository | None = None) -> FastAPI:
             revision_id, state, verdict = review_revision(
                 database_url, project_id, payload.decision, payload.comment,
                 payload.selected_master_asset_id,
+                [item.model_dump() for item in payload.roots],
             )
         except KeyError as exc:
             raise ApiError(404, "project_not_found", "intake project does not exist") from exc
@@ -396,6 +398,8 @@ def create_app(repository: Repository | None = None) -> FastAPI:
             )
         try:
             job, created = create_semantic_suggestion_job(database_url, project_id, payload.source_asset_id)
+        except NoUnclassifiedLayers as exc:
+            raise ApiError(409, "all_layers_classified", str(exc)) from exc
         except KeyError as exc:
             raise ApiError(404, "cad_document_not_found", str(exc)) from exc
         if created:

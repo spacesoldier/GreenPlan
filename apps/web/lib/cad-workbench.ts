@@ -26,6 +26,97 @@ export type CadWorkspaceRoot = {
   nodes: CadDocumentTreeNode[];
 };
 
+export type HostPathParts = { leading: string[]; folder: string; file: string };
+
+export function projectRelativePath(path: string): string {
+  const parts = path.replaceAll("\\", "/").split("/").filter(Boolean);
+  return (parts.length > 1 ? parts.slice(1) : parts).join("/");
+}
+
+export const cadCategoryLabels: Record<string, string> = {
+  "vegetation.tree": "Дерево", "vegetation.shrub": "Кустарник",
+  "vegetation.grass": "Газон и травянистая растительность", "vegetation.mixed": "Смешанные зелёные насаждения",
+  "structure.building": "Здание", "structure.wall.external": "Наружная стена",
+  "structure.support": "Опора или мачта", "structure.retaining_wall": "Подпорная стенка",
+  "transport.road.carriageway": "Проезжая часть", "transport.road.edge": "Край проезжей части",
+  "transport.road.curb": "Бортовой камень", "transport.pedestrian.path_edge": "Край тротуара или дорожки",
+  "transport.tram.track_edge": "Край трамвайного полотна", "transport.cycleway.edge": "Край велодорожки",
+  "transport.ditch.edge": "Бровка канавы",
+  "utility.unknown": "Инженерные сети · тип не уточнён",
+  "utility.water.pipeline": "Водопровод", "utility.drainage.pipeline": "Дренаж или водосток",
+  "utility.sewer.pipeline": "Канализация", "utility.heat.pipeline": "Тепловая сеть",
+  "utility.gas.pipeline": "Газопровод", "utility.power.cable": "Силовой кабель",
+  "utility.power.overhead": "Воздушная линия", "utility.telecom.cable": "Кабель связи",
+  "territory.work_boundary": "Граница работ", "territory.visibility_zone": "Зона видимости",
+  "territory.metro_technical_zone": "Техническая зона метро",
+  "territory.sanitary_protection_zone": "Санитарно-защитная зона",
+  "territory.utility_protection_zone": "Охранная зона сети",
+  "terrain.slope_toe": "Подошва откоса", "terrain.groundwater_level": "Уровень грунтовых вод",
+  terrain: "Рельеф", not_applicable: "Служебное / неприменимо", unknown: "Не определено",
+  "unknown.constraint": "Неопознанное ограничение",
+};
+
+function categoryOptions(...codes: string[]): [string, string][] {
+  return codes.map((code) => [code, cadCategoryLabels[code]]);
+}
+
+export const cadCategoryGroups = [
+  { label: "Быстрый выбор", options: categoryOptions("unknown", "not_applicable", "utility.unknown") },
+  { label: "Растительность", options: categoryOptions("vegetation.tree", "vegetation.shrub", "vegetation.grass", "vegetation.mixed") },
+  { label: "Здания и сооружения", options: categoryOptions("structure.building", "structure.wall.external", "structure.support", "structure.retaining_wall") },
+  { label: "Улицы и дорожки", options: categoryOptions("transport.road.carriageway", "transport.road.edge", "transport.road.curb", "transport.pedestrian.path_edge", "transport.tram.track_edge", "transport.cycleway.edge", "transport.ditch.edge") },
+  { label: "Инженерные сети — точный тип", options: categoryOptions("utility.water.pipeline", "utility.drainage.pipeline", "utility.sewer.pipeline", "utility.heat.pipeline", "utility.gas.pipeline", "utility.power.cable", "utility.power.overhead", "utility.telecom.cable") },
+  { label: "Границы и зоны", options: categoryOptions("territory.work_boundary", "territory.visibility_zone", "territory.metro_technical_zone", "territory.sanitary_protection_zone", "territory.utility_protection_zone") },
+  { label: "Рельеф", options: categoryOptions("terrain", "terrain.slope_toe", "terrain.groundwater_level") },
+];
+
+export const cadCategoryOptions = cadCategoryGroups.flatMap((group) => group.options);
+
+export function cadCategoryLabel(code: string): string {
+  return cadCategoryLabels[code] || code;
+}
+
+export function hostPathParts(path: string): HostPathParts {
+  const parts = path.replaceAll("\\", "/").split("/").filter(Boolean).slice(1);
+  const file = parts.pop() || "";
+  const folder = parts.pop() || "";
+  return { leading: parts, folder, file };
+}
+
+export type FindingSelectionItem = { id: string; source_asset_id: string | null; status: string };
+
+export function effectiveFindingSelection(
+  items: FindingSelectionItem[],
+  selectedId: string,
+): string {
+  const active = items.filter((item) => ["open", "rejected"].includes(item.status));
+  return active.some((item) => item.id === selectedId) ? selectedId : active[0]?.id || "";
+}
+
+export function nextFindingSelection(
+  before: FindingSelectionItem[],
+  after: FindingSelectionItem[],
+  removedId: string,
+): string {
+  const active = (items: FindingSelectionItem[]) => items.filter((item) => ["open", "rejected"].includes(item.status));
+  const previous = active(before);
+  const remaining = active(after);
+  const current = previous.find((item) => item.id === removedId);
+  if (!current) return remaining[0]?.id || "";
+  const sourceKey = (item: FindingSelectionItem) => item.source_asset_id || "project";
+  const currentSource = sourceKey(current);
+  const sameSource = remaining.find((item) => sourceKey(item) === currentSource);
+  if (sameSource) return sameSource.id;
+  const sourceOrder = [...new Set(previous.map(sourceKey))];
+  const currentSourceIndex = sourceOrder.indexOf(currentSource);
+  for (const source of sourceOrder.slice(currentSourceIndex + 1)) {
+    const next = remaining.find((item) => sourceKey(item) === source);
+    if (next) return next.id;
+  }
+  const knownSources = new Set(sourceOrder);
+  return remaining.find((item) => !knownSources.has(sourceKey(item)))?.id || "";
+}
+
 export type XrefCandidateOption = {
   path: string;
   file: IntakeFile | undefined;
@@ -131,6 +222,39 @@ export function groupLayerFamilies(layers: CadLayer[]): Map<string, CadLayer[]> 
   }, new Map<string, CadLayer[]>());
 }
 
+
+export function reviewableLayerSuggestionIds(layers: CadLayer[]): string[] {
+  return layers
+    .filter((layer) => layer.review_status !== "superseded")
+    .map((layer) => layer.suggestion_id);
+}
+
+export function areAllCadLayersClassified(layers: Pick<CadLayer, "mapping_status">[]): boolean {
+  return layers.length > 0 && layers.every((layer) => layer.mapping_status === "confirmed");
+}
+
+export function toggleScopedSelection(currentIds: string[], scopeIds: string[], selected: boolean): string[] {
+  const scope = new Set(scopeIds);
+  if (selected) return Array.from(new Set([...currentIds, ...scopeIds]));
+  return currentIds.filter((id) => !scope.has(id));
+}
+
+export function newlyAssistantClassifiedSuggestionIds(previous: CadLayer[], next: CadLayer[]): string[] {
+  const previousByLayer = new Map(previous.map((layer) => [layer.id, layer]));
+  return next.flatMap((layer) => {
+    const before = previousByLayer.get(layer.id);
+    const becameConfirmed = before && before.mapping_status !== "confirmed" && layer.mapping_status === "confirmed";
+    return becameConfirmed && layer.axis_results.assistant_assigned ? [before.suggestion_id] : [];
+  });
+}
+
+export type LayerReviewMode = "all" | "unknown" | "reviewed";
+
+export function layerMatchesReviewMode(layer: CadLayer, mode: LayerReviewMode): boolean {
+  if (mode === "unknown") return layer.mapping_status !== "confirmed";
+  if (mode === "reviewed") return layer.mapping_status === "confirmed";
+  return true;
+}
 export function clampTrayHeight(value: number, viewportHeight: number): number {
   return Math.round(Math.min(Math.max(value, 180), Math.max(180, viewportHeight * 0.75)));
 }

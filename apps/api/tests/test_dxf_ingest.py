@@ -40,11 +40,26 @@ def test_layer_semantics_are_explainable_and_unknown_stays_unknown():
     assert classify_layer("Новый_Водопровод_Ном._пера__243").class_code == "utility.water.pipeline"
     assert classify_layer("Кабель связи МГТС").class_code == "utility.telecom.cable"
     assert classify_layer("ДВ_ГП_П_Граница работ").class_code == "territory.work_boundary"
-    assert classify_layer("04 Дендроплан (растения)").class_code == "vegetation.existing"
+    assert classify_layer("04 Дендроплан (растения)").class_code == "vegetation.mixed"
     unknown = classify_layer("Новый_! Съемка_Ном._пера__95")
     assert unknown.class_code == "unknown.constraint"
     assert unknown.semantic_status == "needs_review"
     assert unknown.confidence < 0.5
+
+
+def test_sp42_constraint_classes_are_not_collapsed_into_broad_categories():
+    assert classify_layer("Дренаж").class_code == "utility.drainage.pipeline"
+    assert classify_layer("Тепловая сеть").class_code == "utility.heat.pipeline"
+    assert classify_layer("Теплосеть").class_code == "utility.heat.pipeline"
+    assert classify_layer("Тепловые сети").class_code == "utility.heat.pipeline"
+    assert classify_layer("Теплотрасса").class_code == "utility.heat.pipeline"
+    assert classify_layer("Край тротуара").class_code == "transport.pedestrian.path_edge"
+    assert classify_layer("Край трамвайного полотна").class_code == "transport.tram.track_edge"
+    assert classify_layer("Подпорная стенка").class_code == "structure.retaining_wall"
+    assert classify_layer("Откосы").class_code == "terrain.slope_toe"
+    assert classify_layer("Подошва откоса").class_code == "terrain.slope_toe"
+    assert classify_layer("Бровка откоса").class_code == "terrain.slope_toe"
+    assert classify_layer("Проектируемый газон").class_code == "vegetation.grass"
 
 
 def test_geometry_conversion_supports_core_dxf_primitives():
@@ -89,5 +104,5 @@ def test_unlimited_import_keeps_every_supported_primitive():
 
 
 def test_vegetation_circle_is_a_position_marker_below_crown_linework():
-    assert geometry_role("vegetation.existing.tree", "Polygon", "CIRCLE") == "position"
-    assert geometry_role("vegetation.existing.tree", "LineString", "SPLINE") == "crown"
+    assert geometry_role("vegetation.tree", "Polygon", "CIRCLE") == "position"
+    assert geometry_role("vegetation.tree", "LineString", "SPLINE") == "crown"

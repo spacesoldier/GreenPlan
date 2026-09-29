@@ -1,5 +1,9 @@
 # Input data is always mounted read-only at runtime; never send it as Docker build context.
 dataset/
+platform/data/
+platform/work/
+platform/exports/
+deliverables/
 reports/
 artifacts/
 .git/

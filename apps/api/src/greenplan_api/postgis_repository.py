@@ -18,6 +18,7 @@ from .models import (
     IntakeProjectSummary,
     IntakeStage,
     MasterCandidate,
+    PublicationRootCandidate,
     CadInventory,
     CadLayerView,
     CadSpaceView,
@@ -37,6 +38,8 @@ from .models import (
     SourceTree,
 )
 from .repository import BBox, RepositoryUnavailable
+from .semantic_jobs import JOB_VIEW_COLUMNS
+from .publication_roots import root_candidates
 
 
 class PostgisRepository:
@@ -196,14 +199,15 @@ class PostgisRepository:
             )
             findings = [FidelityFinding(**item) for item in cursor.fetchall()]
             cursor.execute(
-                """SELECT mc.source_asset_id,de.relative_path,mc.score::float8 AS score,
+                """SELECT mc.source_asset_id,de.relative_path,de.role AS delivery_role,mc.score::float8 AS score,
                           mc.role,mc.cues,mc.selected
                    FROM intake.master_candidates mc
                    JOIN intake.delivery_entries de ON de.source_asset_id=mc.source_asset_id
                    WHERE mc.revision_id=%s ORDER BY mc.score DESC,de.relative_path""",
                 (summary.revision_id,),
             )
-            candidates = [MasterCandidate(**item) for item in cursor.fetchall()]
+            candidate_rows = cursor.fetchall()
+            candidates = [MasterCandidate(**{key: item[key] for key in ("source_asset_id", "relative_path", "score", "role", "cues", "selected")}) for item in candidate_rows]
             cursor.execute(
                 """SELECT ci.id,ci.source_asset_id,de.relative_path,ci.stage,ci.format,
                           ci.format_version,ci.parse_status,ci.tool_name,ci.tool_version,
@@ -231,7 +235,7 @@ class PostgisRepository:
             cursor.execute(
                 """SELECT cl.id,cs.id AS suggestion_id,cd.source_asset_id,de.relative_path AS source_relative_path,
                           cl.name,cl.entity_count,cl.mapping_status,cl.confidence::float8 AS confidence,
-                          cs.suggested_category,cs.method,
+                          COALESCE(cs.reviewed_category,cs.suggested_category) AS suggested_category,cs.method,
                           COALESCE(cs.input_snapshot->'entity_types','{}'::jsonb) AS entity_types,
                           cs.axis_results,cs.review_status
                    FROM intake.cad_layers cl
@@ -289,6 +293,35 @@ class PostgisRepository:
                     matches=[str(value) for value in properties.get("matches") or []],
                 ))
             cursor.execute(
+                """SELECT source_asset_id,root_role FROM intake.publication_roots
+                   WHERE revision_id=%s ORDER BY position,selected_at""",
+                (summary.revision_id,),
+            )
+            selected_roots = {str(item["source_asset_id"]): item["root_role"] for item in cursor.fetchall()}
+            path_by_id = {str(item["source_asset_id"]): item["relative_path"] for item in candidate_rows}
+            root_rows = root_candidates(candidate_rows, [item.model_dump() for item in xrefs])
+            publication_roots = []
+            for item in root_rows:
+                closure_ids = [str(item["source_asset_id"]), *[str(value) for value in item["dependency_asset_ids"]]]
+                closure = set(closure_ids)
+                critical_count = sum(
+                    1 for finding in findings
+                    if finding.severity == "critical" and finding.status == "open"
+                    and (finding.source_asset_id is None or str(finding.source_asset_id) in closure)
+                )
+                source_id = str(item["source_asset_id"])
+                publication_roots.append(PublicationRootCandidate(
+                    source_asset_id=item["source_asset_id"], relative_path=str(item["relative_path"]),
+                    workspace_kind=str(item["workspace_kind"]), default_role=str(item["default_role"]),
+                    score=float(item.get("score") or 0), cues=list(item.get("cues") or []),
+                    selected=source_id in selected_roots, selected_role=selected_roots.get(source_id),
+                    dependency_asset_ids=item["dependency_asset_ids"],
+                    dependency_paths=[path_by_id[value] for value in item["dependency_asset_ids"] if value in path_by_id],
+                    dependency_count=int(item["dependency_count"]), unresolved_count=int(item["unresolved_count"]),
+                    critical_count=critical_count, closure_fingerprint=str(item["closure_fingerprint"]),
+                ))
+
+            cursor.execute(
                 """SELECT id,revision_id,input_fingerprint,schema_version,taxonomy_version,
                           provider_version,state,progress::float8 AS progress,summary,error_summary,
                           started_at,heartbeat_at,finished_at,created_at
@@ -306,8 +339,7 @@ class PostgisRepository:
                 )
                 runs.append(AssistantRunView(**run_row, tasks=[AssistantTaskView(**task) for task in cursor.fetchall()]))
             cursor.execute(
-                """SELECT id,source_asset_id,provider,model,state,total_count,completed_count,
-                          failed_count,error_summary,started_at,heartbeat_at,finished_at,created_at
+                f"""SELECT {JOB_VIEW_COLUMNS}
                    FROM intake.semantic_suggestion_jobs WHERE revision_id=%s
                    ORDER BY created_at DESC LIMIT 20""",
                 (summary.revision_id,),
@@ -315,7 +347,7 @@ class PostgisRepository:
             semantic_jobs = [SemanticSuggestionJobView(**row) for row in cursor.fetchall()]
             return IntakeProjectDetail(
                 **summary.model_dump(), description=description, files=files, stages=stages,
-                findings=findings, master_candidates=candidates, inventories=inventories,
+                findings=findings, master_candidates=candidates, publication_roots=publication_roots, inventories=inventories,
                 cad_spaces=spaces, cad_layers=layers,
                 classification_suggestions=suggestions, assistant_runs=runs,
                 xref_dependencies=xrefs, semantic_suggestion_jobs=semantic_jobs,

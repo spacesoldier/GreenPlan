@@ -27,7 +27,11 @@ draft ADR -> accepted ADR -> planned phase -> tests written/failing
 | [Phase 3, iteration 2](phase-03-iteration-02-intake-assistant.md) | Planned | Ассистент разбора смешанной поставки, XREF assembly, versioned taxonomy и прогон 20 проектов |
 | [Phase 3, iteration 3](phase-03-iteration-03-cad-workbench.md) | In progress | Workbench vertical slice: delivery/CAD trees, layer-family batch review, typed issues и нижний журнал |
 | [Phase 3, iteration 4](phase-03-iteration-04-guided-cad-review.md) | In progress | Верхний мастер, selection inspector, resizable tray и локальные AI-подсказки слоёв; [checkpoint 1](phase-03-iteration-04-checkpoint-01.md) |
+| [Phase 3, iteration 5](phase-03-iteration-05-local-model-orchestration.md) | Complete | Ax orchestration и последовательный CPU llama.cpp runtime для Qwen/Gemma |
+| [Phase 3, iteration 6](phase-03-iteration-06-preview-publication-and-layer-viewer.md) | Planned | Preview publication при неполной семантике и фасетный навигатор слоёв в spatial viewer |
+| [Phase 3, iteration 7](phase-03-iteration-07-observable-publication.md) | Planned | Single-flight Celery publication job, persisted progress, activity events и server-driven disabled button |
 | [Phase 4](phase-04-review-and-planning.md) | Planned | OSM review, нормативный review и первый детерминированный constraint/planting workflow |
+| [Phase 4, iteration 1](phase-04-iteration-01-sp42-rulebook-taxonomy.md) | In progress | СП 42 rulebook и нормативно согласованная CAD taxonomy v2 |
 
 ## Обязательная структура будущей фазы
 

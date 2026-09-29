@@ -240,6 +240,28 @@ class MasterCandidate(ApiModel):
     selected: bool
 
 
+class PublicationRootCandidate(ApiModel):
+    source_asset_id: UUID
+    relative_path: str
+    workspace_kind: str
+    default_role: str
+    score: float
+    cues: list[str] = Field(default_factory=list)
+    selected: bool = False
+    selected_role: str | None = None
+    dependency_asset_ids: list[UUID] = Field(default_factory=list)
+    dependency_paths: list[str] = Field(default_factory=list)
+    dependency_count: int = 0
+    unresolved_count: int = 0
+    critical_count: int = 0
+    closure_fingerprint: str
+
+
+class PublicationRootSelection(ApiModel):
+    source_asset_id: UUID
+    role: Literal["effective_design", "reference_context", "historical"]
+
+
 class CadInventory(ApiModel):
     id: UUID
     source_asset_id: UUID
@@ -358,6 +380,7 @@ class SemanticSuggestionRequest(ApiModel):
 class SemanticSuggestionJobView(ApiModel):
     id: UUID
     source_asset_id: UUID
+    scope: Literal["selected_document"]
     provider: str
     model: str
     state: str
@@ -391,6 +414,7 @@ class IntakeProjectDetail(IntakeProjectSummary):
     stages: list[IntakeStage] = Field(default_factory=list)
     findings: list[FidelityFinding] = Field(default_factory=list)
     master_candidates: list[MasterCandidate] = Field(default_factory=list)
+    publication_roots: list[PublicationRootCandidate] = Field(default_factory=list)
     inventories: list[CadInventory] = Field(default_factory=list)
     cad_spaces: list[CadSpaceView] = Field(default_factory=list)
     cad_layers: list[CadLayerView] = Field(default_factory=list)
@@ -420,3 +444,4 @@ class IntakeReviewRequest(ApiModel):
     decision: Literal["accept", "reject"]
     comment: str = Field(min_length=3, max_length=2000)
     selected_master_asset_id: UUID | None = None
+    roots: list[PublicationRootSelection] = Field(default_factory=list, max_length=100)
