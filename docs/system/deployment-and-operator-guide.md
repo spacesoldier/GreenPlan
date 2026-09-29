@@ -275,18 +275,20 @@ docker compose --env-file .env logs --tail=100 \
 
 | Repository | Dockerfile | Кто использует |
 |---|---|---|
-| `spacesoldier/greenplan-api` | `apps/api/Dockerfile` | `api`, `domain-import`, `semantic-worker` |
-| `spacesoldier/greenplan-web` | `apps/web/Dockerfile` | `web` |
-| `spacesoldier/greenplan-control` | `platform/control.Dockerfile` | CLI tools |
-| `spacesoldier/greenplan-oda-worker` | `platform/oda-worker.Dockerfile` | ODA queue; без proprietary runtime |
-| `spacesoldier/greenplan-libredwg-worker` | `platform/libredwg-worker.Dockerfile` | LibreDWG queue |
-| `spacesoldier/greenplan-laya` | `platform/laya.Dockerfile` | Laya inference; без checkpoint внутри |
-| `spacesoldier/greenplan-llm-runtime` | `platform/llm-runtime.Dockerfile` | llama.cpp supervisor; без GGUF внутри |
-| `spacesoldier/greenplan-decision-orchestrator` | `apps/decision-orchestrator/Dockerfile` | Ax policy/orchestration |
+| `simplizio/greenplan-api` | `apps/api/Dockerfile` | `api`, `semantic-worker`, `domain-import`, `plant-library-import` |
+| `simplizio/greenplan-web` | `apps/web/Dockerfile` | `web` |
+| `simplizio/greenplan-control` | `platform/control.Dockerfile` | CLI tools |
+| `simplizio/greenplan-oda-worker` | `platform/oda-worker.Dockerfile` | ODA queue; без proprietary runtime |
+| `simplizio/greenplan-libredwg-worker` | `platform/libredwg-worker.Dockerfile` | LibreDWG queue |
+| `simplizio/greenplan-laya` | `platform/laya.Dockerfile` | Laya inference; без checkpoint внутри |
+| `simplizio/greenplan-llm-runtime` | `platform/llm-runtime.Dockerfile` | llama.cpp supervisor с Qwen3-4B Q4_K_M |
+| `simplizio/greenplan-decision-orchestrator` | `apps/decision-orchestrator/Dockerfile` | Ax policy/orchestration |
 
 PostgreSQL, PostGIS и Redis не дублируются: используются официальные upstream
-images. Веса моделей не следует помещать ни в Git, ни в application images.
-Они загружаются отдельно, хранятся на host и подключаются read-only.
+images. Qwen3-4B Q4_K_M входит только в целевой public `greenplan-llm-runtime`
+с лицензией, checksum и model revision. Gemma, YandexGPT и Laya checkpoint не
+публикуются в images до отдельной проверки условий распространения. Полная
+политика описана в [плане Docker Hub](docker-hub-publication-plan.md).
 
 ### 7.2 Политика тегов
 
@@ -311,7 +313,7 @@ docker login
 ```bash
 export GREENPLAN_VERSION=0.1.0
 export GREENPLAN_SHA="$(git rev-parse --short=12 HEAD)"
-export DOCKERHUB_NAMESPACE=spacesoldier
+export DOCKERHUB_NAMESPACE=simplizio
 
 docker build -f apps/api/Dockerfile \
   -t "$DOCKERHUB_NAMESPACE/greenplan-api:$GREENPLAN_VERSION" .
@@ -358,7 +360,8 @@ done
 ### 7.4 Что нельзя встраивать в images
 
 - ODA DEB и извлечённый runtime;
-- GGUF, Laya/Hugging Face cache;
+- Gemma и YandexGPT GGUF, а также Laya/Hugging Face checkpoint без
+  подтверждённой лицензии;
 - dataset и загруженные проекты;
 - `.env`, пароли и API keys;
 - PostgreSQL/PostGIS PGDATA;

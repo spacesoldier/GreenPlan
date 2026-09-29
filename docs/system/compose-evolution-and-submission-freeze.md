@@ -46,7 +46,7 @@ proposals, proposal geometries, capacity assessments, checks и rejections. Их
 6. подобрать совместимые plant profiles;
 7. сохранить proposals, checks, rejections и progress events.
 
-Worker переиспользует образ `spacesoldier/greenplan-api` и слушает отдельную
+Worker переиспользует образ `simplizio/greenplan-api` и слушает отдельную
 очередь `planning`. Начальная concurrency — `1`: тяжёлые `ST_Buffer`,
 `ST_UnaryUnion`, `ST_Difference` и массовая проверка кандидатов конкурируют за RAM
 и временное пространство PostGIS.
@@ -64,7 +64,7 @@ Worker переиспользует образ `spacesoldier/greenplan-api` и �
 6. выполнить atomic rename в `/exports`;
 7. сохранить checksum, размер, generator version и provenance.
 
-Worker также переиспользует `spacesoldier/greenplan-api`, слушает очередь
+Worker также переиспользует `simplizio/greenplan-api`, слушает очередь
 `export` и получает mount `./exports:/exports`.
 
 Для выпуска DXF ODA не нужен: файл создаётся через `ezdxf`. Если позже понадобится
@@ -77,7 +77,7 @@ ODA, а не скрытой частью DXF-export.
 
 ```yaml
 planning-worker:
-  image: spacesoldier/greenplan-api:${GREENPLAN_VERSION}
+  image: simplizio/greenplan-api:${GREENPLAN_VERSION}
   environment:
     GREENPLAN_DATABASE_URL: ${GREENPLAN_DATABASE_URL}
     CELERY_BROKER_URL: redis://redis:6379/0
@@ -91,7 +91,7 @@ planning-worker:
     - --prefetch-multiplier=1
 
 export-worker:
-  image: spacesoldier/greenplan-api:${GREENPLAN_VERSION}
+  image: simplizio/greenplan-api:${GREENPLAN_VERSION}
   environment:
     GREENPLAN_DATABASE_URL: ${GREENPLAN_DATABASE_URL}
     CELERY_BROKER_URL: redis://redis:6379/0
@@ -116,14 +116,14 @@ health/heartbeat и тест восстановления после паден�
 Нет. Оба worker используют существующий `greenplan-api` image. Рекомендованный
 набор остаётся равен восьми repositories:
 
-1. `spacesoldier/greenplan-api`;
-2. `spacesoldier/greenplan-web`;
-3. `spacesoldier/greenplan-control`;
-4. `spacesoldier/greenplan-oda-worker`;
-5. `spacesoldier/greenplan-libredwg-worker`;
-6. `spacesoldier/greenplan-laya`;
-7. `spacesoldier/greenplan-llm-runtime`;
-8. `spacesoldier/greenplan-decision-orchestrator`.
+1. `simplizio/greenplan-api`;
+2. `simplizio/greenplan-web`;
+3. `simplizio/greenplan-control`;
+4. `simplizio/greenplan-oda-worker`;
+5. `simplizio/greenplan-libredwg-worker`;
+6. `simplizio/greenplan-laya`;
+7. `simplizio/greenplan-llm-runtime`;
+8. `simplizio/greenplan-decision-orchestrator`.
 
 Разные роли одного image различаются Compose command и очередью, а не отдельным
 repository.
@@ -181,12 +181,13 @@ Qdrant также не нужен для геометрического planning
 submission-2026-09-29
 ```
 
-Правила недельного freeze:
+До явной команды владельца о freeze этот tag является candidate pointer и может
+передвигаться на каждый проверенный коммит. После команды о заморозке действуют
+правила недельного freeze:
 
-- tag не перемещается и не переиспользуется;
+- tag больше не перемещается и не переиспользуется;
 - зафиксированный commit не amend и не force-push;
-- дальнейшая разработка может продолжаться новыми коммитами только после
-  оговорённого периода freeze;
+- дальнейшая разработка продолжается новыми коммитами без изменения tag;
 - критический hotfix получает новый tag с суффиксом, а не заменяет старый;
 - Docker images сдачи получают version tag и полный Git SHA;
 - submission manifest фиксирует Git tag, image digests, дату, конфигурацию и

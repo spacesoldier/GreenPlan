@@ -54,7 +54,8 @@ GreenPlan — прототип системы для работы с масси�
   компоненты, данные, действующий процесс и следующий виток планирующего движка.
 - [Установка и руководство оператора](docs/system/deployment-and-operator-guide.md) —
   зависимости, Docker, локальные модели и последовательность разбора проекта.
-- [Развитие Compose и фиксация сдачи](docs/system/compose-evolution-and-submission-freeze.md) — очереди planning/export, ресурсные границы и недельный submission tag.
+- [Развитие Compose и фиксация сдачи](docs/system/compose-evolution-and-submission-freeze.md) — очереди planning/export, ресурсные границы и submission tag.
+- [Публикация в Docker Hub](docs/system/docker-hub-publication-plan.md) — восемь repositories, содержимое images, лицензии и политика тегов.
 - [Архитектурный пакет](docs/README.md) — навигация по предметным спецификациям.
 - [Architecture Decision Records](docs/adr/README.md) — принятые и предлагаемые
   архитектурные решения с обоснованиями.
