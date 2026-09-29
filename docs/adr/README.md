@@ -72,6 +72,8 @@ ADR фиксируют архитектурное решение, его кон�
 | [0045](0045-library-workspace-and-versioned-knowledge-catalogs.md) | Accepted | Общесистемная библиотека нормативов, принципов генерации и растений |
 | [0046](0046-cad-plant-symbol-library-ingestion.md) | Accepted | Импорт CAD-блоков растений с review, provenance и сохранением геометрии |
 | [0047](0047-root-scoped-cad-viewer-workspace.md) | Accepted | Viewer открывает один publication root с его XREF closure и позволяет исправлять категории слоёв |
+| [0048](0048-semantic-diff-revisions.md) | Accepted | Накопительные semantic diff revisions поверх неизменяемой геометрии |
+| [0049](0049-planting-feasibility-zone-reconstruction.md) | Accepted | Seed-assisted восстановление поверхностных зон и нормативное вычитание ограничений |
 
 ## Именование
 
