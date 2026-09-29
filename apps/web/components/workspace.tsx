@@ -467,11 +467,10 @@ export function Workspace() {
           <div className="brand-mark">G</div>
           <div className="brand-copy"><strong>GreenPlan</strong><span>spatial intelligence</span></div>
         </Link>
-        <div className="project-switcher project-choice">
-          <span className="eyebrow">Проект</span>
-          <select value={projectId} onChange={(event) => { setSelectedId(""); setManifest(null); setProjectId(event.target.value); }}>
-            {projects.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}
-          </select>
+        <div className="project-address" aria-label={`Текущий проект: ${project?.title ?? "Загрузка проекта"}`}>
+          <span className="project-address-pin" aria-hidden="true" />
+          <span className="eyebrow">Проект озеленения</span>
+          <strong title={project?.title}>{project?.title ?? "Загрузка проекта…"}</strong>
         </div>
         <div className="project-switcher drawing-choice">
           <span className="eyebrow">Открытый чертёж</span>
