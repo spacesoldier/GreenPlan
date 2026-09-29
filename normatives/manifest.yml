@@ -10,7 +10,7 @@ entries:
     source_status: official_file
     corpus_status: downloaded_verified_file
     access_policy: internal_copy
-    local_path: "raw/moscow-743-pp__checked-2026-09-24.pdf"
+    local_path: "local/moscow-743-pp__checked-2026-09-24.pdf"
     media_type: "application/pdf"
     size_bytes: 8715708
     page_count: 199

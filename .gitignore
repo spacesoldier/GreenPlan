@@ -1,6 +1,8 @@
 # Source datasets and generated delivery bundles are too large for Git.
 /dataset/
 /deliverables/
+\n# Local reference publications; keep out of the public Git history.
+/normatives/local/
 
 # Runtime state and generated CAD conversion artifacts.
 /platform/data/

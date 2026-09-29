@@ -21,7 +21,7 @@
 Источник: `https://www.mos.ru/upload/documents/files/7389/Postanovlenie743-PP.pdf`.
 
 ```text
-local file: normatives/raw/moscow-743-pp__checked-2026-09-24.pdf
+local file: normatives/local/moscow-743-pp__checked-2026-09-24.pdf
 media: PDF 1.4, A4, not encrypted
 pages: 199
 bytes: 8715708

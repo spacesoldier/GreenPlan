@@ -2,7 +2,7 @@ schema_version: 1
 status: needs_expert_review
 source:
   document_code: moscow-743-pp
-  local_file: raw/moscow-743-pp__checked-2026-09-24.pdf
+  local_file: local/moscow-743-pp__checked-2026-09-24.pdf
   sha256: f5af99982255e6de363543bb2789d395f81a86928c3bebc6ef7ba4a404db2276
   locator: "п. 3.6.3, таблица 3.6.1"
   pdf_page: 13
