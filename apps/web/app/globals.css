@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "./viewer-workspace.css";
 
 :root {
   --ink: #17231f;

@@ -30,6 +30,7 @@ draft ADR -> accepted ADR -> planned phase -> tests written/failing
 | [Phase 3, iteration 5](phase-03-iteration-05-local-model-orchestration.md) | Complete | Ax orchestration и последовательный CPU llama.cpp runtime для Qwen/Gemma |
 | [Phase 3, iteration 6](phase-03-iteration-06-preview-publication-and-layer-viewer.md) | Planned | Preview publication при неполной семантике и фасетный навигатор слоёв в spatial viewer |
 | [Phase 3, iteration 7](phase-03-iteration-07-observable-publication.md) | Planned | Single-flight Celery publication job, persisted progress, activity events и server-driven disabled button |
+| [Phase 3, iteration 8](phase-03-iteration-08-root-scoped-viewer.md) | In progress | Один активный publication root, XREF/layer tree, root-aware streaming и исправление категорий из viewer |
 | [Phase 4](phase-04-review-and-planning.md) | Planned | OSM review, нормативный review и первый детерминированный constraint/planting workflow |
 | [Phase 4, iteration 1](phase-04-iteration-01-sp42-rulebook-taxonomy.md) | In progress | СП 42 rulebook и нормативно согласованная CAD taxonomy v2 |
 | [Phase 4, iteration 2](phase-04-iteration-02-knowledge-library-bootstrap.md) | Planned | Qwen runtime, идемпотентный разбор СП и библиотека нормативов, принципов генерации и CAD-символов растений |

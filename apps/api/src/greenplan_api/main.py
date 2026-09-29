@@ -489,9 +489,11 @@ def create_app(repository: Repository | None = None) -> FastAPI:
         response_model=SceneManifest,
         tags=["scene"],
     )
-    def get_scene_manifest(model_id: UUID, repo: Repo):
-        manifest = repo.get_manifest(model_id)
+    def get_scene_manifest(model_id: UUID, repo: Repo, root_id: UUID | None = None):
+        manifest = repo.get_manifest(model_id, root_id)
         if manifest is None:
+            if root_id is not None and repo.get_manifest(model_id) is not None:
+                raise ApiError(404, "publication_root_not_found", "publication root does not exist")
             raise ApiError(404, "model_not_found", "model does not exist")
         return manifest
 
@@ -509,15 +511,18 @@ def create_app(repository: Repository | None = None) -> FastAPI:
         lod: Annotated[int, Query(ge=0, le=3)] = 0,
         limit: Annotated[int, Query(ge=1, le=5000)] = 5000,
         offset: Annotated[int, Query(ge=0)] = 0,
+        root_id: UUID | None = None,
     ):
-        manifest = repo.get_manifest(model_id)
+        manifest = repo.get_manifest(model_id, root_id)
         if manifest is None:
+            if root_id is not None and repo.get_manifest(model_id) is not None:
+                raise ApiError(404, "publication_root_not_found", "publication root does not exist")
             raise ApiError(404, "model_not_found", "model does not exist")
         if bbox is None and manifest.feature_count > 1000:
             raise ApiError(422, "bbox_required", "bbox is required for non-small models")
         parsed_bbox = parse_bbox(bbox) if bbox is not None else manifest.extent
         layer_set = {item.strip() for item in layers.split(",") if item.strip()} if layers else None
-        page = repo.get_features(model_id, parsed_bbox, layer_set, lod, limit + 1, offset) or []
+        page = repo.get_features(model_id, parsed_bbox, layer_set, lod, limit + 1, offset, manifest.active_root_id) or []
         has_more = len(page) > limit
         features = page[:limit]
         response.headers["Cache-Control"] = "private, max-age=300, stale-while-revalidate=3600"
@@ -528,6 +533,7 @@ def create_app(repository: Repository | None = None) -> FastAPI:
             bbox=parsed_bbox,
             features=features,
             next_offset=offset + limit if has_more else None,
+            active_root_id=manifest.active_root_id,
         )
 
     @app.get("/v1/objects/{object_id}", response_model=ObjectDetail, tags=["objects"])

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from functools import lru_cache
+from pathlib import PurePosixPath
 from uuid import UUID
 
 import psycopg
@@ -32,6 +33,8 @@ from .models import (
     ProjectSummary,
     SceneLayer,
     SceneManifest,
+    SceneRoot,
+    SceneSource,
     SceneSpatialFocus,
     SourceNode,
     SourceReference,
@@ -39,7 +42,7 @@ from .models import (
 )
 from .repository import BBox, RepositoryUnavailable
 from .semantic_jobs import JOB_VIEW_COLUMNS
-from .publication_roots import root_candidates
+from .publication_roots import root_candidates, workspace_kind
 
 
 class PostgisRepository:
@@ -442,19 +445,39 @@ class PostgisRepository:
         return cursor.fetchone()
 
     @lru_cache(maxsize=128)
-    def get_manifest(self, model_id: UUID) -> SceneManifest | None:
+    def _root_feature_counts(self, model_id: UUID) -> dict[str | None, int]:
+        with self._connect() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                """SELECT properties->>'publication_root_id' AS root_id, count(*) AS total
+                   FROM geo.spatial_objects WHERE model_id=%s
+                   GROUP BY properties->>'publication_root_id'""",
+                (model_id,),
+            )
+            return {row["root_id"]: row["total"] for row in cursor.fetchall()}
+
+    @lru_cache(maxsize=128)
+    def get_manifest(self, model_id: UUID, root_id: UUID | None = None) -> SceneManifest | None:
         with self._connect() as connection, connection.cursor() as cursor:
             model = self._model_row(cursor, model_id)
             if model is None:
                 return None
+            root_entries = list((model.get("properties") or {}).get("roots") or [])
+            selected = root_id or next(
+                (UUID(item["source_asset_id"]) for item in root_entries if item.get("role") == "effective_design"),
+                UUID(root_entries[0]["source_asset_id"]) if root_entries else None,
+            )
+            if root_id is not None and not any(str(root_id) == item.get("source_asset_id") for item in root_entries):
+                return None
+            root_clause = " AND so.properties->>'publication_root_id'=%s" if selected else ""
+            root_params = (str(selected),) if selected else ()
             cursor.execute(
-                """SELECT ST_XMin(bounds)::float8 AS min_x, ST_YMin(bounds)::float8 AS min_y,
+                f"""SELECT ST_XMin(bounds)::float8 AS min_x, ST_YMin(bounds)::float8 AS min_y,
                           ST_XMax(bounds)::float8 AS max_x, ST_YMax(bounds)::float8 AS max_y
                    FROM (SELECT ST_Extent(og.geom) AS bounds
                          FROM geo.object_geometries og
                          JOIN geo.spatial_objects so ON so.id=og.object_id
-                         WHERE so.model_id=%s AND og.is_primary) value""",
-                (model_id,),
+                         WHERE so.model_id=%s AND og.is_primary {root_clause}) value""",
+                (model_id, *root_params),
             )
             extent_row = cursor.fetchone()
             if not extent_row or extent_row["min_x"] is None:
@@ -484,7 +507,7 @@ class PostgisRepository:
                 coverage=focus_row["coverage"],
             )
             cursor.execute(
-                """SELECT so.properties->>'layer_id' AS layer_id,
+                f"""SELECT so.properties->>'layer_id' AS layer_id,
                           max(so.properties->>'source_layer') AS title,
                           array_agg(DISTINCT oc.code ORDER BY oc.code) AS class_codes,
                           array_agg(DISTINCT og.role ORDER BY og.role) AS geometry_roles,
@@ -492,10 +515,10 @@ class PostgisRepository:
                    FROM geo.spatial_objects so
                    JOIN geo.object_classes oc ON oc.id=so.class_id
                    JOIN geo.object_geometries og ON og.object_id=so.id AND og.is_primary
-                   WHERE so.model_id=%s
+                   WHERE so.model_id=%s {root_clause}
                    GROUP BY so.properties->>'layer_id'
                    ORDER BY max(so.properties->>'source_layer')""",
-                (model_id,),
+                (model_id, *root_params),
             )
             layers = [
                 SceneLayer(
@@ -504,24 +527,52 @@ class PostgisRepository:
                     class_codes=row["class_codes"],
                     geometry_roles=row["geometry_roles"],
                     feature_count=row["feature_count"],
+                    source_asset_id=selected if selected and "$0$" not in (row["title"] or "") else None,
+                    source_path=next((item.get("relative_path") for item in root_entries if item.get("source_asset_id") == str(selected)), None) if "$0$" not in (row["title"] or "") else None,
+                    source_layer_name=(row["title"] or row["layer_id"]).split("$0$")[-1],
+                    origin_kind="xref" if "$0$" in (row["title"] or "") else "root" if selected else "unknown",
+                    class_code=row["class_codes"][0] if len(row["class_codes"]) == 1 else None,
                 )
                 for row in cursor.fetchall()
             ]
             cursor.execute(
-                """SELECT count(*) AS total,
+                f"""SELECT count(*) AS total,
                           count(*) FILTER (WHERE semantic_status='needs_review') AS needs_review
-                   FROM geo.spatial_objects WHERE model_id=%s""",
-                (model_id,),
+                   FROM geo.spatial_objects so WHERE model_id=%s {root_clause}""",
+                (model_id, *root_params),
             )
             counts = cursor.fetchone()
             cursor.execute(
-                """SELECT count(DISTINCT object_id) AS conflicts
+                f"""SELECT count(DISTINCT object_id) AS conflicts
                    FROM provenance.object_evidence oe
                    JOIN geo.spatial_objects so ON so.id=oe.object_id
-                   WHERE so.model_id=%s AND oe.decision='conflict'""",
-                (model_id,),
+                   WHERE so.model_id=%s AND oe.decision='conflict' {root_clause}""",
+                (model_id, *root_params),
             )
             conflicts = cursor.fetchone()["conflicts"]
+            counts_by_root = self._root_feature_counts(model_id)
+            roots = [SceneRoot(
+                id=UUID(item["source_asset_id"]), path=item["relative_path"],
+                title=PurePosixPath(item["relative_path"].replace("\\", "/")).name,
+                role=item.get("role", "reference_context"),
+                workspace_kind=workspace_kind(item["relative_path"]) or "other",
+                feature_count=counts_by_root.get(item["source_asset_id"], 0),
+            ) for item in root_entries]
+            active_entry = next((item for item in root_entries if item.get("source_asset_id") == str(selected)), None)
+            sources = []
+            if active_entry:
+                sources.append(SceneSource(
+                    asset_id=selected, path=active_entry["relative_path"],
+                    title=PurePosixPath(active_entry["relative_path"].replace("\\", "/")).name,
+                    relation="root", provenance_status="exact",
+                ))
+                sources.extend(SceneSource(
+                    path=dependency.get("original_path") or dependency.get("child") or dependency.get("block", "XREF"),
+                    title=PurePosixPath((dependency.get("original_path") or dependency.get("child") or dependency.get("block", "XREF")).replace("\\", "/")).name,
+                    relation="xref", parent_path=dependency.get("parent"),
+                    block_name=dependency.get("block"), original_path=dependency.get("original_path"),
+                    provenance_status="inferred",
+                ) for dependency in active_entry.get("dependencies", []))
             return SceneManifest(
                 model_id=model_id,
                 model_version=model["version_no"],
@@ -531,11 +582,12 @@ class PostgisRepository:
                 layers=layers,
                 issues={"needs_review": counts["needs_review"], "conflict": conflicts},
                 feature_count=counts["total"],
+                roots=roots, active_root_id=selected, sources=sources,
             )
 
     def get_features(
         self, model_id: UUID, bbox: BBox, layers: set[str] | None, lod: int,
-        limit: int | None = None, offset: int = 0,
+        limit: int | None = None, offset: int = 0, root_id: UUID | None = None,
     ) -> list[Feature] | None:
         with self._connect() as connection, connection.cursor() as cursor:
             model = self._model_row(cursor, model_id)
@@ -543,24 +595,24 @@ class PostgisRepository:
                 return None
             assembly_layer_clause = ""
             canonical_layer_clause = ""
+            assembly_root_clause = ""
+            canonical_root_clause = ""
             tolerance = (0.0, 0.08, 0.25, 0.75)[lod]
             assembly_geometry_column = ("geom", "geom_lod1", "geom_lod2", "geom_lod3")[lod]
-            query_params: list[object] = [
-                model_id,
-                *bbox,
-            ]
+            if root_id:
+                assembly_root_clause = "AND representative.properties->>\'publication_root_id\'=%s"
+                canonical_root_clause = "AND so.properties->>\'publication_root_id\'=%s"
+            query_params: list[object] = [model_id, *bbox]
+            if root_id:
+                query_params.append(str(root_id))
             if layers:
                 assembly_layer_clause = "AND ra.layer_id = ANY(%s)"
                 query_params.append(list(layers))
-            query_params.extend([
-                tolerance,
-                tolerance * 0.25,
-                tolerance,
-                model_id,
-                *bbox,
-            ])
+            query_params.extend([tolerance, tolerance * 0.25, tolerance, model_id, *bbox])
+            if root_id:
+                query_params.append(str(root_id))
             if layers:
-                canonical_layer_clause = "AND so.properties->>'layer_id' = ANY(%s)"
+                canonical_layer_clause = "AND so.properties->>\'layer_id\' = ANY(%s)"
                 query_params.append(list(layers))
             query_params.extend([limit or (12000 if lod <= 1 else 6000), offset])
             cursor.execute(
@@ -577,6 +629,7 @@ class PostgisRepository:
                       JOIN geo.object_classes oc ON oc.id=ra.class_id
                       WHERE ra.model_id=%s
                         AND ra.geom && ST_MakeEnvelope(%s,%s,%s,%s,0)
+                        {assembly_root_clause}
                         {assembly_layer_clause}
 
                       UNION ALL
@@ -596,6 +649,7 @@ class PostgisRepository:
                       WHERE so.model_id=%s
                         AND ram.object_id IS NULL
                         AND og.geom && ST_MakeEnvelope(%s,%s,%s,%s,0)
+                        {canonical_root_clause}
                         {canonical_layer_clause}
                     )
                     SELECT * FROM rendered

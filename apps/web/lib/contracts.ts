@@ -24,6 +24,26 @@ export type SceneLayer = {
   class_codes: string[];
   geometry_roles: string[];
   feature_count: number;
+  source_asset_id: string | null;
+  source_path: string | null;
+  source_layer_name: string | null;
+  origin_kind: "root" | "xref" | "unknown";
+  class_code: string | null;
+  suggestion_id: string | null;
+  mapping_status: string | null;
+  classification_stale: boolean;
+};
+
+export type SceneRoot = {
+  id: string; path: string; title: string; role: string;
+  workspace_kind: "project_solution" | "source_data" | "archive" | "other";
+  feature_count: number;
+};
+
+export type SceneSource = {
+  asset_id: string | null; path: string; title: string; relation: "root" | "xref";
+  parent_path: string | null; block_name: string | null; original_path: string | null;
+  provenance_status: "exact" | "inferred";
 };
 
 export type SceneManifest = {
@@ -43,6 +63,9 @@ export type SceneManifest = {
   layers: SceneLayer[];
   issues: { needs_review: number; conflict: number };
   feature_count: number;
+  roots: SceneRoot[];
+  active_root_id: string | null;
+  sources: SceneSource[];
 };
 
 export type Geometry = {
@@ -73,6 +96,7 @@ export type FeatureCollection = {
   bbox: [number, number, number, number];
   features: Feature[];
   next_offset: number | null;
+  active_root_id: string | null;
 };
 
 export type SourceNode = {

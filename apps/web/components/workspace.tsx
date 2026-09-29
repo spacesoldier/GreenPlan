@@ -15,14 +15,19 @@ import {
 } from "@/lib/feature-tile-cache";
 
 import type {
+  CadLayer,
   Evidence,
   Feature,
   FeatureCollection,
   ObjectDetail,
+  IntakeProjectDetail,
   Project,
+  SceneLayer,
   SceneManifest,
-  SourceNode,
+  SceneSource,
 } from "@/lib/contracts";
+import { cadCategoryGroups, cadCategoryLabel } from "@/lib/cad-workbench";
+import { groupSceneRoots, matchCadLayer, rootScopedTileIdentity, sceneLayerSource } from "@/lib/viewer-workspace";
 import {
   extentContains,
   fitExtent,
@@ -71,7 +76,13 @@ export function Workspace() {
   const [manifest, setManifest] = useState<SceneManifest | null>(null);
   const [features, setFeatures] = useState<Feature[]>([]);
   const [featureFrameKey, setFeatureFrameKey] = useState("empty");
-  const [sources, setSources] = useState<SourceNode[]>([]);
+  const [rootId, setRootId] = useState("");
+  const [rootLoading, setRootLoading] = useState(false);
+  const [intake, setIntake] = useState<IntakeProjectDetail | null>(null);
+  const [selectedLayerId, setSelectedLayerId] = useState("");
+  const [classificationOverrides, setClassificationOverrides] = useState<Record<string, string>>({});
+  const [classificationSaving, setClassificationSaving] = useState(false);
+  const [republishRequired, setRepublishRequired] = useState(false);
   const [visibleLayers, setVisibleLayers] = useState<Set<string>>(new Set());
   const [selectedId, setSelectedId] = useState("");
   const [selectedObject, setSelectedObject] = useState<ObjectDetail | null>(null);
@@ -123,35 +134,44 @@ export function Workspace() {
 
   useEffect(() => {
     if (!project) return;
+    const params = new URLSearchParams(window.location.search);
+    const requestedRoot = params.get("project") === project.id ? params.get("root") || "" : "";
+    setRootId(requestedRoot);
+    setIntake(null);
+    setClassificationOverrides({});
+    setRepublishRequired(false);
     const controller = new AbortController();
-    setState("loading");
-    Promise.all([
-      getJson<SceneManifest>(`/v1/models/${project.current_model_id}/scene-manifest`, controller.signal),
-      getJson<{ nodes: SourceNode[] }>(`/v1/project-revisions/${project.current_revision_id}/source-tree`, controller.signal),
-    ])
-      .then(([nextManifest, sourceTree]) => {
+    getJson<IntakeProjectDetail>("/v1/intake/projects/" + project.id, controller.signal)
+      .then(setIntake)
+      .catch((reason: Error) => { if (reason.name !== "AbortError") setError(reason.message); });
+    return () => controller.abort();
+  }, [project]);
+
+  useEffect(() => {
+    if (!project) return;
+    const controller = new AbortController();
+    if (!manifest || manifest.model_id !== project.current_model_id) setState("loading");
+    setRootLoading(true);
+    const suffix = rootId ? "?root_id=" + encodeURIComponent(rootId) : "";
+    getJson<SceneManifest>("/v1/models/" + project.current_model_id + "/scene-manifest" + suffix, controller.signal)
+      .then((nextManifest) => {
         setManifest(nextManifest);
-        setSources(sourceTree.nodes);
-        setFeatures([]);
-        setFeatureFrameKey(`${project.current_model_id}/${nextManifest.model_version}/empty`);
-        featureTileCache.current.clear();
+        if (nextManifest.active_root_id && nextManifest.active_root_id !== rootId) setRootId(nextManifest.active_root_id);
         activeTileWindow.current = null;
         displayedLod.current = null;
         frameRequestId.current += 1;
         previousViewportCenter.current = null;
         setVisibleLayers(new Set(nextManifest.layers.map((layer) => layer.id)));
-        const requestedObject = new URLSearchParams(window.location.search).get("object") ?? "";
-        setSelectedId(requestedObject);
+        setSelectedLayerId("");
+        setSelectedId("");
         setState(nextManifest.feature_count ? "ready" : "empty");
+        if (!nextManifest.feature_count) setRootLoading(false);
       })
       .catch((reason: Error) => {
-        if (reason.name !== "AbortError") {
-          setError(reason.message);
-          setState("error");
-        }
+        if (reason.name !== "AbortError") { setError(reason.message); setState("error"); setRootLoading(false); }
       });
     return () => controller.abort();
-  }, [project]);
+  }, [project, rootId]);
 
   useEffect(() => {
     if (!selectedId) {
@@ -174,11 +194,13 @@ export function Workspace() {
     if (!projectId || state === "loading") return;
     const params = new URLSearchParams(window.location.search);
     params.set("project", projectId);
+    if (rootId) params.set("root", rootId);
+    else params.delete("root");
     if (selectedId) params.set("object", selectedId);
     else params.delete("object");
     params.set("view", view);
     window.history.replaceState(null, "", `${window.location.pathname}?${params}`);
-  }, [projectId, selectedId, state, view]);
+  }, [projectId, rootId, selectedId, state, view]);
 
   const focusExtent = useMemo<Extent>(
     () => manifest?.spatial_focus?.extent ?? manifest?.extent ?? [0, 0, 500, 300],
@@ -203,6 +225,8 @@ export function Workspace() {
   useEffect(() => {
     if (!project || !manifest || manifest.model_id !== project.current_model_id || state !== "ready" || dragging) return;
     const modelId = project.current_model_id;
+    const sceneIdentity = rootScopedTileIdentity(modelId, manifest.active_root_id);
+    const activeRootId = manifest.active_root_id;
     const center: [number, number] = [viewport.x + viewport.width / 2, viewport.y + viewport.height / 2];
     const previous = previousViewportCenter.current;
     const directionX = previous ? (center[0] - previous[0]) / Math.max(viewport.width, 1) : 0;
@@ -223,12 +247,12 @@ export function Workspace() {
     }
     const active = activeTileWindow.current;
     const canReuseWindow = active
-      && active.modelId === modelId
+      && active.modelId === sceneIdentity
       && active.modelVersion === manifest.model_version
       && active.lod === lod
       && extentContains(active.bbox, visibleBBox);
     const tiles = canReuseWindow ? active.tiles : tilesForBBox(
-        modelId,
+        sceneIdentity,
         manifest.model_version,
         nextPrefetchBBox,
         manifest.extent,
@@ -237,7 +261,7 @@ export function Workspace() {
       );
     if (!canReuseWindow) {
       activeTileWindow.current = {
-        modelId,
+        modelId: sceneIdentity,
         modelVersion: manifest.model_version,
         lod,
         bbox: tileCoverage(tiles) ?? nextPrefetchBBox,
@@ -264,6 +288,7 @@ export function Workspace() {
     if (cache.allReady(tiles)) {
       cache.prune(new Set(tiles.map((tile) => tile.key)));
       setFeatureLoading(false);
+      setRootLoading(false);
       return;
     }
 
@@ -272,7 +297,7 @@ export function Workspace() {
       let offset = 0;
       do {
         const page = await getJson<FeatureCollection>(
-          `/v1/models/${modelId}/features?bbox=${tile.bbox.join(",")}&lod=${tile.lod}&limit=5000&offset=${offset}`,
+          "/v1/models/" + modelId + "/features?bbox=" + tile.bbox.join(",") + "&lod=" + tile.lod + "&limit=5000&offset=" + offset + (activeRootId ? "&root_id=" + encodeURIComponent(activeRootId) : ""),
           signal,
         );
         accumulated.push(...page.features);
@@ -300,7 +325,7 @@ export function Workspace() {
       } catch (reason) {
         if (reason instanceof Error && reason.name !== "AbortError") setError(reason.message);
       } finally {
-        if (requestId === frameRequestId.current) setFeatureLoading(false);
+        if (requestId === frameRequestId.current) { setFeatureLoading(false); setRootLoading(false); }
       }
     }, 60);
     return () => {
@@ -402,6 +427,35 @@ export function Workspace() {
     });
   }
 
+  const rootGroups = useMemo(() => groupSceneRoots(manifest?.roots ?? []), [manifest?.roots]);
+  const sourceLayerGroups = useMemo(() => {
+    const availableSources: SceneSource[] = manifest?.sources.length ? manifest.sources : [{ asset_id: null, path: "legacy model", title: "Единая модель", relation: "root", parent_path: null, block_name: null, original_path: null, provenance_status: "inferred" }];
+    const uniqueSources = Array.from(new Map(availableSources.map((source) => [source.path + ":" + (source.block_name || "root"), source])).values());
+    return uniqueSources.map((source) => ({
+      source,
+      layers: (manifest?.layers ?? []).filter((layer) => sceneLayerSource(layer, availableSources)?.path === source.path),
+    })).filter((group) => group.layers.length > 0);
+  }, [manifest]);
+  const selectedSceneLayer = manifest?.layers.find((layer) => layer.id === selectedLayerId);
+  const selectedCadLayer = selectedSceneLayer ? matchCadLayer(selectedSceneLayer, intake?.cad_layers ?? []) : undefined;
+
+  async function reclassifyLayer(layer: SceneLayer, cadLayer: CadLayer, category: string) {
+    if (!project) return;
+    setClassificationSaving(true);
+    setError("");
+    try {
+      const response = await fetch("/api/domain/v1/intake/projects/" + project.id + "/classifications/" + cadLayer.suggestion_id + "/review", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ decision: "accept", category, comment: "Исправлено при визуальной проверке опубликованной модели" }),
+      });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body?.error?.message || "Не удалось назначить категорию");
+      setClassificationOverrides((current) => ({ ...current, [layer.id]: category }));
+      setRepublishRequired(true);
+    } catch (reason) { setError(reason instanceof Error ? reason.message : "Не удалось назначить категорию"); }
+    finally { setClassificationSaving(false); }
+  }
+
   const selectedAssemblyMemberCount = typeof selectedObject?.properties.member_count === "number"
     ? selectedObject.properties.member_count
     : null;
@@ -413,10 +467,19 @@ export function Workspace() {
           <div className="brand-mark">G</div>
           <div className="brand-copy"><strong>GreenPlan</strong><span>spatial intelligence</span></div>
         </Link>
-        <div className="project-switcher">
+        <div className="project-switcher project-choice">
           <span className="eyebrow">Проект</span>
-          <select value={projectId} onChange={(event) => { setSelectedId(""); setProjectId(event.target.value); }}>
+          <select value={projectId} onChange={(event) => { setSelectedId(""); setManifest(null); setProjectId(event.target.value); }}>
             {projects.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}
+          </select>
+        </div>
+        <div className="project-switcher drawing-choice">
+          <span className="eyebrow">Открытый чертёж</span>
+          <select value={manifest?.active_root_id ?? rootId} disabled={!manifest?.roots.length || rootLoading} onChange={(event) => setRootId(event.target.value)}>
+            {!manifest?.roots.length && <option value="">Единая legacy-модель</option>}
+            {rootGroups.map((group) => <optgroup key={group.kind} label={group.label}>
+              {group.roots.map((root) => <option key={root.id} value={root.id}>{root.path} · {root.feature_count.toLocaleString("ru-RU")}</option>)}
+            </optgroup>)}
           </select>
         </div>
         <div className="topbar-meta">
@@ -427,23 +490,31 @@ export function Workspace() {
 
       <section className="workspace">
         <aside className="left-panel panel">
-          <div className="panel-heading"><span>Навигация</span><button aria-label="Свернуть">‹</button></div>
-          <nav className="nav-tabs"><button className="active">Модель</button><button>Источники</button></nav>
-          <div className="tree-section">
-            <p className="tree-label">Каноническая модель</p>
-            <div className="tree-root"><span className="tree-icon">◇</span><div><strong>{project?.title ?? "Загрузка…"}</strong><small>model v{project?.model_version ?? "—"}</small></div></div>
-            {manifest?.layers.map((layer) => (
-              <label className="layer-row" key={layer.id}>
-                <input type="checkbox" checked={visibleLayers.has(layer.id)} onChange={() => toggleLayer(layer.id)} />
-                <span className={`layer-swatch swatch-${layer.id}`} />
-                <span>{layer.title}</span><small>{layer.feature_count.toLocaleString("ru-RU")}</small>
-              </label>
+          <div className="panel-heading"><span>Состав чертежа</span><span className="tree-count">{manifest?.layers.length ?? 0} слоёв</span></div>
+          <div className="tree-section root-scene-tree">
+            <div className="tree-root active-root"><span className="tree-icon">DWG</span><div><strong>{manifest?.roots.find((item) => item.id === manifest.active_root_id)?.title ?? project?.title ?? "Загрузка…"}</strong><small>{manifest?.roots.find((item) => item.id === manifest.active_root_id)?.path ?? "legacy model"}</small></div></div>
+            <label className="layer-master-toggle"><input type="checkbox" checked={Boolean(manifest?.layers.length) && visibleLayers.size === manifest?.layers.length} onChange={(event) => setVisibleLayers(event.target.checked ? new Set(manifest?.layers.map((layer) => layer.id) ?? []) : new Set())} />Показать все слои</label>
+            {sourceLayerGroups.map(({ source, layers }) => (
+              <details className="source-branch" key={source.path + (source.block_name || "root")} open={source.relation === "root"}>
+                <summary><span className={source.relation === "xref" ? "source-kind xref" : "source-kind"}>{source.relation === "xref" ? "XREF" : "ROOT"}</span><div><strong>{source.title}</strong><small>{source.path}</small></div><em>{layers.length}</em></summary>
+                <div className="source-layer-list">{layers.map((layer) => {
+                  const matched = matchCadLayer(layer, intake?.cad_layers ?? []);
+                  const classCode = classificationOverrides[layer.id] || matched?.suggested_category || layer.class_code || layer.class_codes[0] || "unknown";
+                  return <div className={"viewer-layer-row " + (selectedLayerId === layer.id ? "selected" : "")} key={layer.id} onClick={() => setSelectedLayerId(layer.id)}>
+                    <input aria-label={"Видимость " + layer.title} type="checkbox" checked={visibleLayers.has(layer.id)} onClick={(event) => event.stopPropagation()} onChange={() => toggleLayer(layer.id)} />
+                    <span className="layer-swatch" /><div><strong>{layer.source_layer_name || layer.title}</strong><small>{cadCategoryLabel(classCode)}</small></div><em>{layer.feature_count.toLocaleString("ru-RU")}</em>
+                  </div>;
+                })}</div>
+              </details>
             ))}
           </div>
-          <div className="tree-section sources">
-            <p className="tree-label">Исходные данные</p>
-            {sources.map((source) => <div className="source-row" key={source.id}><span>{source.title.split(".").pop()?.toUpperCase() ?? "FILE"}</span><div><strong>{source.title}</strong><small>{source.display_path}</small></div></div>)}
-          </div>
+          {selectedSceneLayer && <div className="viewer-layer-editor">
+            <span className="eyebrow">Категория выбранного слоя</span><strong>{selectedSceneLayer.source_layer_name || selectedSceneLayer.title}</strong>
+            {selectedCadLayer ? <select disabled={classificationSaving} value={classificationOverrides[selectedSceneLayer.id] || selectedCadLayer.suggested_category || selectedSceneLayer.class_code || "unknown"} onChange={(event) => reclassifyLayer(selectedSceneLayer, selectedCadLayer, event.target.value)}>
+              {cadCategoryGroups.map((group) => <optgroup label={group.label} key={group.label}>{group.options.map(([code, label]) => <option value={code} key={code}>{label}</option>)}</optgroup>)}
+            </select> : <p>Исходный CAD-слой не сопоставлен однозначно. Категорию можно исправить в CAD-разборе.</p>}
+            {republishRequired && <div className="republish-note">Решение сохранено в источнике. Чтобы оно изменило объекты этой сцены, опубликуйте новую версию модели.</div>}
+          </div>}
           <div className="quality-card"><span className="quality-score">{Math.round((1 - ((manifest?.issues.needs_review ?? 0) / Math.max(manifest?.feature_count ?? 1, 1))) * 100)}%</span><div><strong>Качество модели</strong><small>{manifest?.issues.needs_review ?? 0} требуют проверки</small></div></div>
         </aside>
 
@@ -489,6 +560,7 @@ export function Workspace() {
                 onPointerLeave={() => setCursorPosition(null)}
               />
             )}
+            {rootLoading && state === "ready" && <div className="root-switch-overlay"><i className="loader" /><div><strong>Открываем выбранный чертёж</strong><span>Старый кадр защищён, пока не готов новый root frame.</span></div></div>}
             {state === "ready" && view === "3d" && <div className="three-placeholder"><div className="wire-cube"><i /><i /><i /></div><strong>3D scene contract готов</strong><span>Полный renderer подключается после Phase 2 spike</span></div>}
             {state === "ready" && view === "2d" && <div className="map-controls" aria-label="Управление видом">
               <button onClick={() => changeZoom(2)} aria-label="Приблизить">+</button>

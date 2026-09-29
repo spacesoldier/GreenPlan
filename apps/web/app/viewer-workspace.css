@@ -1,0 +1,45 @@
+.drawing-choice { flex: 1 1 520px; max-width: 780px; }
+.drawing-choice select { width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.project-choice { flex: 0 1 240px; min-width: 180px; }
+.project-switcher select:disabled { color: #7d8a83; cursor: wait; }
+.tree-count { color: var(--muted); font-size: 11px; font-weight: 650; letter-spacing: 0; text-transform: none; }
+.left-panel { display: flex; flex-direction: column; }
+.root-scene-tree { flex: 1; overflow: auto; padding-top: 12px; }
+.active-root { position: sticky; top: -12px; z-index: 4; margin: 0 -2px 10px; padding: 10px 4px; background: rgba(252,253,251,.96); backdrop-filter: blur(12px); }
+.active-root .tree-icon { width: 38px; color: #25664b; font-size: 9px; font-weight: 850; letter-spacing: .04em; }
+.layer-master-toggle { display: flex; align-items: center; gap: 9px; margin: 4px 0 12px; padding: 8px; border: 1px solid var(--line); border-radius: 9px; color: #34483e; font-size: 12px; font-weight: 700; }
+.layer-master-toggle input, .viewer-layer-row input { width: 16px; height: 16px; accent-color: var(--green); }
+.source-branch { margin-bottom: 7px; border: 1px solid #dce5df; border-radius: 11px; overflow: clip; background: #fff; }
+.source-branch > summary { display: grid; grid-template-columns: 40px minmax(0,1fr) auto; gap: 9px; align-items: center; min-height: 52px; padding: 8px 10px; cursor: pointer; list-style: none; }
+.source-branch > summary::-webkit-details-marker { display: none; }
+.source-branch > summary:hover { background: #f3f7f4; }
+.source-branch > summary div { min-width: 0; display: grid; gap: 3px; }
+.source-branch > summary strong, .source-branch > summary small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.source-branch > summary strong { color: #1b2d24; font-size: 12px; }
+.source-branch > summary small { color: #64766c; font-size: 10px; }
+.source-branch > summary em { color: #6d7c74; font-size: 10px; font-style: normal; font-variant-numeric: tabular-nums; }
+.source-kind { display: inline-grid; place-items: center; min-height: 23px; border-radius: 6px; background: #dff0e5; color: #286248; font-size: 8px; font-weight: 850; }
+.source-kind.xref { background: #e2ebf4; color: #3b6484; }
+.source-layer-list { padding: 3px 6px 7px 14px; border-top: 1px solid #edf1ee; background: #fafcfa; }
+.viewer-layer-row { display: grid; grid-template-columns: 18px 8px minmax(0,1fr) auto; gap: 8px; align-items: center; min-height: 48px; padding: 6px 7px; border-radius: 8px; cursor: pointer; }
+.viewer-layer-row:hover { background: #edf4ef; }
+.viewer-layer-row.selected { background: #dff0e5; box-shadow: inset 3px 0 #3b8b62; }
+.viewer-layer-row > div { min-width: 0; display: grid; gap: 3px; }
+.viewer-layer-row strong, .viewer-layer-row small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.viewer-layer-row strong { color: #17271f; font-size: 12px; font-weight: 720; }
+.viewer-layer-row small { color: #52675c; font-size: 10px; }
+.viewer-layer-row em { color: #68786f; font-size: 10px; font-style: normal; font-variant-numeric: tabular-nums; }
+.viewer-layer-editor { position: sticky; bottom: 0; z-index: 5; display: grid; gap: 8px; padding: 14px; border-top: 1px solid #cad8cf; background: rgba(249,252,249,.97); backdrop-filter: blur(16px); box-shadow: 0 -14px 35px rgba(25,45,35,.09); }
+.viewer-layer-editor > strong { overflow: hidden; color: #182920; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.viewer-layer-editor select { min-width: 0; width: 100%; border: 1px solid #b8c9be; border-radius: 9px; background: white; padding: 9px 10px; color: #17271f; font-size: 12px; font-weight: 650; }
+.viewer-layer-editor p { margin: 0; color: #68776f; font-size: 11px; line-height: 1.45; }
+.republish-note { padding: 9px; border: 1px solid #dfc98d; border-radius: 8px; background: #fff8e6; color: #694f17; font-size: 10px; line-height: 1.45; }
+.root-switch-overlay { position: absolute; inset: 0; z-index: 8; display: flex; align-items: center; justify-content: center; gap: 12px; background: rgba(237,241,239,.68); backdrop-filter: blur(2px); }
+.root-switch-overlay > div { display: grid; gap: 4px; }
+.root-switch-overlay strong { color: #1c3127; font-size: 14px; }
+.root-switch-overlay span { color: #5d7066; font-size: 11px; }
+
+@media (max-width: 1250px) {
+  .brand-copy { display: none; }
+  .drawing-choice { min-width: 280px; }
+}

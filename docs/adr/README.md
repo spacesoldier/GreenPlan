@@ -71,6 +71,7 @@ ADR фиксируют архитектурное решение, его кон�
 | [0044](0044-qwen-runtime-image-and-regulatory-bootstrap.md) | Accepted | Публичный Qwen-only runtime и идемпотентный provenance-aware bootstrap СП |
 | [0045](0045-library-workspace-and-versioned-knowledge-catalogs.md) | Accepted | Общесистемная библиотека нормативов, принципов генерации и растений |
 | [0046](0046-cad-plant-symbol-library-ingestion.md) | Accepted | Импорт CAD-блоков растений с review, provenance и сохранением геометрии |
+| [0047](0047-root-scoped-cad-viewer-workspace.md) | Accepted | Viewer открывает один publication root с его XREF closure и позволяет исправлять категории слоёв |
 
 ## Именование
 

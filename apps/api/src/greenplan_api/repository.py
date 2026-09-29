@@ -40,11 +40,11 @@ class Repository(Protocol):
 
     def list_models(self, project_id: UUID) -> list[ModelSummary] | None: ...
 
-    def get_manifest(self, model_id: UUID) -> SceneManifest | None: ...
+    def get_manifest(self, model_id: UUID, root_id: UUID | None = None) -> SceneManifest | None: ...
 
     def get_features(
         self, model_id: UUID, bbox: BBox, layers: set[str] | None, lod: int,
-        limit: int | None = None, offset: int = 0,
+        limit: int | None = None, offset: int = 0, root_id: UUID | None = None,
     ) -> list[Feature] | None: ...
 
     def get_object(self, object_id: UUID) -> ObjectDetail | None: ...
@@ -116,13 +116,21 @@ class InMemoryRepository:
         revision_id = self._projects[project_id].current_revision_id
         return [item for item in self._models.values() if item.project_revision_id == revision_id]
 
-    def get_manifest(self, model_id: UUID) -> SceneManifest | None:
+    def get_manifest(self, model_id: UUID, root_id: UUID | None = None) -> SceneManifest | None:
         self.ping()
-        return self._manifests.get(model_id)
+        manifest = self._manifests.get(model_id)
+        if manifest is None or not manifest.roots:
+            return manifest
+        active = root_id or manifest.active_root_id or next(
+            (item.id for item in manifest.roots if item.role == "effective_design"), manifest.roots[0].id,
+        )
+        if not any(item.id == active for item in manifest.roots):
+            return None
+        return manifest.model_copy(update={"active_root_id": active})
 
     def get_features(
         self, model_id: UUID, bbox: BBox, layers: set[str] | None, lod: int,
-        limit: int | None = None, offset: int = 0,
+        limit: int | None = None, offset: int = 0, root_id: UUID | None = None,
     ) -> list[Feature] | None:
         self.ping()
         if model_id not in self._manifests:
@@ -133,6 +141,7 @@ class InMemoryRepository:
             if record.model_id == model_id
             and intersects(record.bbox, bbox)
             and (not layers or record.feature.layer_id in layers)
+            and (root_id is None or record.feature.properties.get("publication_root_id") == str(root_id))
         ]
         return items[offset:] if limit is None else items[offset:offset + limit]
 

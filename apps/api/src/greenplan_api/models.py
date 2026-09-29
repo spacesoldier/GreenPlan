@@ -61,6 +61,34 @@ class SceneLayer(ApiModel):
     class_codes: list[str]
     geometry_roles: list[str]
     feature_count: int
+    source_asset_id: UUID | None = None
+    source_path: str | None = None
+    source_layer_name: str | None = None
+    origin_kind: Literal["root", "xref", "unknown"] = "unknown"
+    class_code: str | None = None
+    suggestion_id: UUID | None = None
+    mapping_status: str | None = None
+    classification_stale: bool = False
+
+
+class SceneRoot(ApiModel):
+    id: UUID
+    path: str
+    title: str
+    role: str
+    workspace_kind: Literal["project_solution", "source_data", "archive", "other"]
+    feature_count: int = 0
+
+
+class SceneSource(ApiModel):
+    asset_id: UUID | None = None
+    path: str
+    title: str
+    relation: Literal["root", "xref"]
+    parent_path: str | None = None
+    block_name: str | None = None
+    original_path: str | None = None
+    provenance_status: Literal["exact", "inferred"] = "inferred"
 
 
 class SceneSpatialFocus(ApiModel):
@@ -83,6 +111,9 @@ class SceneManifest(ApiModel):
     layers: list[SceneLayer]
     issues: dict[str, int]
     feature_count: int
+    roots: list[SceneRoot] = Field(default_factory=list)
+    active_root_id: UUID | None = None
+    sources: list[SceneSource] = Field(default_factory=list)
 
 
 class Feature(ApiModel):
@@ -107,6 +138,7 @@ class FeatureCollection(ApiModel):
     bbox: tuple[float, float, float, float]
     features: list[Feature]
     next_offset: int | None = None
+    active_root_id: UUID | None = None
 
 
 class SourceReference(ApiModel):
