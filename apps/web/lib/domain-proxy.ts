@@ -1,4 +1,4 @@
-const SAFE_SEGMENT = /^[A-Za-z0-9._~-]+$/;
+const SAFE_SEGMENT = /^[A-Za-z0-9._~:-]+$/;
 
 function proxyError(status: number, code: string, message: string, correlationId: string) {
   return Response.json(

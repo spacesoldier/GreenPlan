@@ -43,3 +43,13 @@ export function matchCadLayer(layer: SceneLayer, candidates: CadLayer[]): CadLay
 export function rootScopedTileIdentity(modelId: string, rootId: string | null, visibleFingerprint = "all"): string {
   return `${modelId}@${rootId || "legacy"}@${visibleFingerprint}`;
 }
+
+export function clampViewerTreeWidth(value: number, viewportWidth: number): number {
+  const maximum = Math.max(220, Math.min(520, viewportWidth - 680));
+  return Math.min(Math.max(value, 220), maximum);
+}
+export type ViewerTool = "navigate" | "mark_lawn";
+
+export function shouldPlaceSurfaceSeed(tool: ViewerTool, button: number, moved: boolean): boolean {
+  return tool === "mark_lawn" && button === 0 && !moved;
+}

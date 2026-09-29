@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { groupSceneRoots, matchCadLayer, rootScopedTileIdentity, sceneLayerSource } from "./viewer-workspace";
+import { clampViewerTreeWidth, shouldPlaceSurfaceSeed, groupSceneRoots, matchCadLayer, rootScopedTileIdentity, sceneLayerSource } from "./viewer-workspace";
 import type { CadLayer, SceneLayer, SceneRoot, SceneSource } from "./contracts";
 
 const root = (id: string, kind: SceneRoot["workspace_kind"]): SceneRoot => ({
@@ -25,4 +25,17 @@ it("matches a unique original CAD layer and scopes tile identity by root", () =>
   const candidate = { id: "cad", suggestion_id: "suggestion", source_asset_id: "source", name: "теплосеть" } as CadLayer;
   expect(matchCadLayer(layer, [candidate])?.suggestion_id).toBe("suggestion");
   expect(rootScopedTileIdentity("model", "root-a")).not.toBe(rootScopedTileIdentity("model", "root-b"));
+});
+it("clamps viewer tree width while preserving drawing space", () => {
+  expect(clampViewerTreeWidth(120, 1600)).toBe(220);
+  expect(clampViewerTreeWidth(410, 1600)).toBe(410);
+  expect(clampViewerTreeWidth(700, 1600)).toBe(520);
+  expect(clampViewerTreeWidth(400, 900)).toBe(220);
+});
+
+it("places a lawn seed only for a stationary primary click in lawn mode", () => {
+  expect(shouldPlaceSurfaceSeed("mark_lawn", 0, false)).toBe(true);
+  expect(shouldPlaceSurfaceSeed("navigate", 0, false)).toBe(false);
+  expect(shouldPlaceSurfaceSeed("mark_lawn", 2, false)).toBe(false);
+  expect(shouldPlaceSurfaceSeed("mark_lawn", 0, true)).toBe(false);
 });

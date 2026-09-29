@@ -11,6 +11,7 @@ from .models import (
     ProjectDetail,
     ProjectSummary,
     SceneManifest,
+    SurfaceRegionDetection,
     SourceTree,
     IntakeProjectDetail,
     IntakeProjectSummary,
@@ -46,6 +47,10 @@ class Repository(Protocol):
         self, model_id: UUID, bbox: BBox, layers: set[str] | None, lod: int,
         limit: int | None = None, offset: int = 0, root_id: UUID | None = None,
     ) -> list[Feature] | None: ...
+
+    def detect_surface_region(
+        self, model_id: UUID, root_id: UUID | None, x: float, y: float,
+    ) -> SurfaceRegionDetection | None: ...
 
     def get_object(self, object_id: UUID) -> ObjectDetail | None: ...
 
@@ -144,6 +149,12 @@ class InMemoryRepository:
             and (root_id is None or record.feature.properties.get("publication_root_id") == str(root_id))
         ]
         return items[offset:] if limit is None else items[offset:offset + limit]
+
+    def detect_surface_region(
+        self, model_id: UUID, root_id: UUID | None, x: float, y: float,
+    ) -> SurfaceRegionDetection | None:
+        self.ping()
+        return None
 
     def get_object(self, object_id: UUID) -> ObjectDetail | None:
         self.ping()

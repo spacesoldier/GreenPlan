@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import Link from "next/link";
 
 import { CadCanvas } from "@/components/cad-canvas";
@@ -25,9 +25,10 @@ import type {
   SceneLayer,
   SceneManifest,
   SceneSource,
+  SurfaceRegionDetection,
 } from "@/lib/contracts";
 import { cadCategoryGroups, cadCategoryLabel } from "@/lib/cad-workbench";
-import { groupSceneRoots, matchCadLayer, rootScopedTileIdentity, sceneLayerSource } from "@/lib/viewer-workspace";
+import { clampViewerTreeWidth, groupSceneRoots, matchCadLayer, rootScopedTileIdentity, sceneLayerSource, shouldPlaceSurfaceSeed, type ViewerTool } from "@/lib/viewer-workspace";
 import {
   extentContains,
   fitExtent,
@@ -90,11 +91,15 @@ export function Workspace() {
   const [state, setState] = useState<LoadState>("loading");
   const [error, setError] = useState("");
   const [view, setView] = useState<"2d" | "3d">("2d");
+  const [tool, setTool] = useState<ViewerTool>("navigate");
+  const [surfaceDetection, setSurfaceDetection] = useState<SurfaceRegionDetection | null>(null);
+  const [surfaceDetecting, setSurfaceDetecting] = useState(false);
+  const [surfaceNotice, setSurfaceNotice] = useState("");
   const [viewport, setViewport] = useState<Viewport>(() => fitExtent([0, 0, 500, 300]));
   const [bearing, setBearing] = useState(0);
   const [dragging, setDragging] = useState(false);
   const [cursorPosition, setCursorPosition] = useState<[number, number] | null>(null);
-  const drag = useRef<{ pointerId: number; x: number; y: number; mode: "pan" | "rotate"; moved: boolean } | null>(null);
+  const drag = useRef<{ pointerId: number; x: number; y: number; button: number; mode: "pan" | "rotate"; moved: boolean } | null>(null);
   const ignoreFeatureClick = useRef(false);
   const frameRequestId = useRef(0);
   const previousViewportCenter = useRef<[number, number] | null>(null);
@@ -109,10 +114,34 @@ export function Workspace() {
   const displayedLod = useRef<number | null>(null);
   const [featureLoading, setFeatureLoading] = useState(false);
   const [canvasAspect, setCanvasAspect] = useState<number | null>(null);
+  const [leftPanelWidth, setLeftPanelWidth] = useState(282);
 
   const project = projects.find((item) => item.id === projectId);
 
   useEffect(() => () => featureTileCache.current.clear(), []);
+
+  useEffect(() => {
+    const saved = Number(window.localStorage.getItem("greenplan.viewer.tree-width"));
+    if (Number.isFinite(saved) && saved > 0) setLeftPanelWidth(clampViewerTreeWidth(saved, window.innerWidth));
+  }, []);
+
+  function beginLeftPanelResize(event: ReactPointerEvent<HTMLButtonElement>) {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = leftPanelWidth;
+    const move = (pointer: PointerEvent) => setLeftPanelWidth(clampViewerTreeWidth(startWidth + pointer.clientX - startX, window.innerWidth));
+    const finish = (pointer: PointerEvent) => {
+      const value = clampViewerTreeWidth(startWidth + pointer.clientX - startX, window.innerWidth);
+      setLeftPanelWidth(value);
+      window.localStorage.setItem("greenplan.viewer.tree-width", String(value));
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", finish);
+      window.removeEventListener("pointercancel", finish);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", finish);
+    window.addEventListener("pointercancel", finish);
+  }
 
   useEffect(() => {
     const controller = new AbortController();
@@ -140,6 +169,8 @@ export function Workspace() {
     setIntake(null);
     setClassificationOverrides({});
     setRepublishRequired(false);
+    setSurfaceDetection(null);
+    setSurfaceNotice("");
     const controller = new AbortController();
     getJson<IntakeProjectDetail>("/v1/intake/projects/" + project.id, controller.signal)
       .then(setIntake)
@@ -164,6 +195,8 @@ export function Workspace() {
         setVisibleLayers(new Set(nextManifest.layers.map((layer) => layer.id)));
         setSelectedLayerId("");
         setSelectedId("");
+        setSurfaceDetection(null);
+        setSurfaceNotice("");
         setState(nextManifest.feature_count ? "ready" : "empty");
         if (!nextManifest.feature_count) setRootLoading(false);
       })
@@ -370,6 +403,7 @@ export function Workspace() {
     drag.current = {
       pointerId: event.pointerId,
       x: event.clientX,
+      button: event.button,
       y: event.clientY,
       mode: event.button === 2 || event.shiftKey ? "rotate" : "pan",
       moved: false,
@@ -408,9 +442,42 @@ export function Workspace() {
     active.y = event.clientY;
   }
 
+  async function detectSurfaceRegion(seed: [number, number]) {
+    if (!project || !manifest) return;
+    setSurfaceDetecting(true);
+    setSurfaceNotice("Ищем замкнутый контур по наземным объектам…");
+    try {
+      const response = await fetch(`/api/domain/v1/models/${project.current_model_id}/surface-regions:detect`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ x: seed[0], y: seed[1], root_id: manifest.active_root_id }),
+      });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body?.error?.message || "Замкнутая область не найдена");
+      const detection = body as SurfaceRegionDetection;
+      setSurfaceDetection(detection);
+      setSurfaceNotice(detection.source === "explicit_surface_polygon"
+        ? "Найдена готовая площадная геометрия."
+        : "Область восстановлена из наземных границ и требует проверки.");
+    } catch (reason) {
+      setSurfaceDetection(null);
+      setSurfaceNotice(reason instanceof Error ? reason.message : "Замкнутая область не найдена");
+    } finally {
+      setSurfaceDetecting(false);
+    }
+  }
+
   function handlePointerUp(event: React.PointerEvent<HTMLCanvasElement>) {
-    if (drag.current?.moved) {
+    const active = drag.current;
+    if (active?.moved) {
       ignoreFeatureClick.current = true;
+      window.setTimeout(() => { ignoreFeatureClick.current = false; }, 0);
+    }
+    if (active && shouldPlaceSurfaceSeed(tool, active.button, active.moved)) {
+      const position = pointerPosition(event);
+      const seed = screenToCadPoint(viewport, bearing, position.x, position.y, position.bounds.width, position.bounds.height);
+      ignoreFeatureClick.current = true;
+      void detectSurfaceRegion(seed);
       window.setTimeout(() => { ignoreFeatureClick.current = false; }, 0);
     }
     drag.current = null;
@@ -459,9 +526,29 @@ export function Workspace() {
   const selectedAssemblyMemberCount = typeof selectedObject?.properties.member_count === "number"
     ? selectedObject.properties.member_count
     : null;
+  const surfacePreview = useMemo<Feature | null>(() => surfaceDetection ? ({
+    id: "surface-region-preview",
+    stable_key: "derived:surface-region-preview",
+    class_code: "derived.surface_candidate",
+    layer_id: "__surface_region_preview__",
+    name: "Предполагаемый газон",
+    lifecycle: "proposed",
+    semantic_status: "needs_review",
+    confidence: surfaceDetection.confidence,
+    geometry_role: "footprint",
+    geometry: surfaceDetection.geometry,
+    properties: { source: surfaceDetection.source, edge_count: surfaceDetection.edge_count },
+  }) : null, [surfaceDetection]);
+  const renderFeatures = useMemo(() => surfacePreview ? [...features, surfacePreview] : features, [features, surfacePreview]);
+  const renderVisibleLayers = useMemo(() => {
+    if (!surfacePreview) return visibleLayers;
+    const next = new Set(visibleLayers);
+    next.add(surfacePreview.layer_id);
+    return next;
+  }, [surfacePreview, visibleLayers]);
 
   return (
-    <main className="app-frame">
+    <main className="app-frame" style={{ "--viewer-tree-width": `${leftPanelWidth}px` } as CSSProperties}>
       <header className="topbar">
         <Link className="workspace-brand" href="/" aria-label="Вернуться ко всем проектам">
           <div className="brand-mark">G</div>
@@ -516,30 +603,34 @@ export function Workspace() {
           </div>}
           <div className="quality-card"><span className="quality-score">{Math.round((1 - ((manifest?.issues.needs_review ?? 0) / Math.max(manifest?.feature_count ?? 1, 1))) * 100)}%</span><div><strong>Качество модели</strong><small>{manifest?.issues.needs_review ?? 0} требуют проверки</small></div></div>
         </aside>
+        <button className="viewer-column-resizer" type="button" aria-label="Изменить ширину состава чертежа" title="Потяните, чтобы изменить ширину панели слоёв" onPointerDown={beginLeftPanelResize} />
 
         <section className="canvas-panel">
           <div className="canvas-toolbar">
             <div className="segmented"><button className={view === "2d" ? "active" : ""} onClick={() => setView("2d")}>2D</button><button className={view === "3d" ? "active" : ""} onClick={() => setView("3d")}>3D</button></div>
             <div className="mode-chip"><span /> CAD local XY</div>
             <div className="toolbar-spacer" />
-            <button className="tool-button">Слои</button><button className="tool-button">Измерить</button><button className="primary-button">Запустить анализ</button>
+            <div className="viewer-tools" role="group" aria-label="Инструмент редактора">
+              <button className={tool === "navigate" ? "active" : ""} onClick={() => setTool("navigate")} title="Перемещать, масштабировать, поворачивать и выбирать объекты">✋ Навигация</button>
+              <button className={tool === "mark_lawn" ? "active" : ""} onClick={() => { setTool("mark_lawn"); setSurfaceNotice("Щёлкните внутри области. Подземные инженерные сети не участвуют в построении контура."); }} title="Щёлкните внутри замкнутой наземными границами области">▱ Обозначить газон</button>
+            </div>
           </div>
 
-          <div className={`drawing-surface view-${view} ${dragging ? "is-dragging" : ""}`}>
+          <div className={`drawing-surface view-${view} tool-${tool} ${dragging ? "is-dragging" : ""}`}>
             {state === "loading" && <div className="state-card"><i className="loader" /><strong>Собираем сцену</strong><span>Загружаем слои и provenance</span></div>}
             {state === "error" && <div className="state-card error"><strong>Сцена недоступна</strong><span>{error}</span><button onClick={() => location.reload()}>Повторить</button></div>}
             {state === "empty" && <div className="state-card"><strong>В модели пока нет объектов</strong><span>Проверьте импорт и выбранную revision</span></div>}
             {state === "ready" && view === "2d" && (
               <CadCanvas
-                features={features}
-                sceneKey={featureFrameKey}
+                features={renderFeatures}
+                sceneKey={`${featureFrameKey}:${surfaceDetection ? surfaceDetection.seed.join(":") : "none"}`}
                 viewport={viewport}
                 bearing={bearing}
-                visibleLayers={visibleLayers}
+                visibleLayers={renderVisibleLayers}
                 selectedId={selectedId}
                 dragging={dragging}
                 onCanvasSize={handleCanvasSize}
-                onSelect={(id) => { if (!ignoreFeatureClick.current) setSelectedId(id); }}
+                onSelect={(id) => { if (tool === "navigate" && !ignoreFeatureClick.current && id !== "surface-region-preview") setSelectedId(id); }}
                 onWheel={(event, canvas) => {
                   event.preventDefault();
                   const bounds = canvas.getBoundingClientRect();
@@ -559,6 +650,7 @@ export function Workspace() {
                 onPointerLeave={() => setCursorPosition(null)}
               />
             )}
+            {(surfaceDetecting || surfaceNotice) && <div className={`surface-detection-toast ${surfaceDetection ? "success" : ""}`}><div>{surfaceDetecting ? <i className="loader" /> : <span aria-hidden="true">{surfaceDetection ? "✓" : "i"}</span>}<p><strong>{surfaceDetecting ? "Определяем область" : surfaceDetection ? "Контур найден" : "Инструмент газона"}</strong><small>{surfaceNotice}</small>{surfaceDetection && <em>Площадь в CAD-единицах: {surfaceDetection.area.toFixed(2)} · уверенность {Math.round(surfaceDetection.confidence * 100)}%</em>}</p></div>{surfaceDetection && <button onClick={() => { setSurfaceDetection(null); setSurfaceNotice(""); }}>Сбросить</button>}</div>}
             {rootLoading && state === "ready" && <div className="root-switch-overlay"><i className="loader" /><div><strong>Открываем выбранный чертёж</strong><span>Старый кадр защищён, пока не готов новый root frame.</span></div></div>}
             {state === "ready" && view === "3d" && <div className="three-placeholder"><div className="wire-cube"><i /><i /><i /></div><strong>3D scene contract готов</strong><span>Полный renderer подключается после Phase 2 spike</span></div>}
             {state === "ready" && view === "2d" && <div className="map-controls" aria-label="Управление видом">

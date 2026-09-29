@@ -99,6 +99,19 @@ export type FeatureCollection = {
   active_root_id: string | null;
 };
 
+export type SurfaceRegionDetection = {
+  resource_version: "1";
+  model_id: string;
+  root_id: string | null;
+  seed: [number, number];
+  geometry: Geometry;
+  area: number;
+  confidence: number;
+  edge_count: number;
+  source: "explicit_surface_polygon" | "polygonized_surface_linework";
+  contributing_classes: string[];
+};
+
 export type SourceNode = {
   id: string;
   parent_id: string | null;

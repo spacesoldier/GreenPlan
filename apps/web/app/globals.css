@@ -33,8 +33,11 @@ button { color: inherit; }
 .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green-bright); box-shadow: 0 0 0 4px rgba(112,200,145,.13); }
 .avatar { border: 0; margin-left: 14px; width: 34px; height: 34px; border-radius: 50%; background: #e2ebe5; font-size: 11px; font-weight: 750; }
 
-.workspace { min-height: 0; display: grid; grid-template-columns: 282px minmax(460px, 1fr) 320px; gap: 1px; background: var(--line); }
+.workspace { min-height: 0; display: grid; grid-template-columns: var(--viewer-tree-width, 282px) 10px minmax(460px, 1fr) 320px; gap: 1px; background: var(--line); }
 .panel, .canvas-panel { min-height: 0; background: var(--panel); }
+.viewer-column-resizer { position:relative;z-index:7;width:10px;height:100%;border:0;border-inline:1px solid #d4ddd7;background:#edf1ee;cursor:col-resize;touch-action:none; }
+.viewer-column-resizer::after { content:"";position:absolute;left:3px;top:calc(50% - 24px);width:2px;height:48px;border-radius:3px;background:#a9b8af;transition:background .16s ease,box-shadow .16s ease; }
+.viewer-column-resizer:hover::after,.viewer-column-resizer:active::after { background:#4f8e6b;box-shadow:0 0 0 3px rgba(79,142,107,.12); }
 .panel { overflow: auto; }
 .panel-heading { height: 49px; padding: 0 17px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); font-size: 11px; font-weight: 750; letter-spacing: .09em; text-transform: uppercase; }
 .panel-heading button { width: 25px; height: 25px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); font-size: 20px; }
@@ -75,15 +78,31 @@ button { color: inherit; }
 .toolbar-spacer { flex: 1; }
 .tool-button, .primary-button { border: 1px solid var(--line); border-radius: 9px; background: white; padding: 7px 10px; font-size: 10px; font-weight: 650; }
 .primary-button { border-color: #255f48; background: var(--green); color: white; padding-inline: 14px; box-shadow: 0 5px 13px rgba(47,118,88,.18); }
+.viewer-tools { display:flex;gap:4px;padding:3px;border:1px solid var(--line);border-radius:11px;background:#eef2ef; }
+.viewer-tools button { border:0;border-radius:8px;background:transparent;padding:7px 11px;color:#516159;font-size:11px;font-weight:750;cursor:pointer;white-space:nowrap; }
+.viewer-tools button:hover { background:rgba(255,255,255,.68);color:var(--ink); }
+.viewer-tools button.active { background:#fff;color:#1f6949;box-shadow:0 2px 8px rgba(24,44,35,.12); }
 .drawing-surface { position: relative; min-height: 0; overflow: hidden; background: #edf1ef; }
 .drawing { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: grab; touch-action: none; user-select: none; }
 .drawing-surface.is-dragging .drawing { cursor: grabbing; }
+.drawing-surface.tool-mark_lawn .drawing { cursor:crosshair; }
+.drawing-surface.tool-mark_lawn.is-dragging .drawing { cursor:grabbing; }
 .picking-canvas { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; pointer-events: none; }
 .drawing-feature { vector-effect: non-scaling-stroke; fill: rgba(74, 102, 126, .1); stroke: #526d86; stroke-width: 1.1; cursor: pointer; outline: none; transition: fill .18s, stroke-width .18s, filter .18s; }
 .drawing-feature:hover, .drawing-feature:focus { fill: rgba(74,102,126,.22); stroke-width: 1.8; }
 .drawing-feature.needs-review { fill: rgba(211,152,54,.12); stroke: #c18428; stroke-dasharray: 4 3; }
 .drawing-feature.is-selected { fill: rgba(71,176,113,.24); stroke: #2e8d59; stroke-width: 2.6; filter: drop-shadow(0 0 4px rgba(71,176,113,.35)); }
 .coordinates { position: absolute; left: 14px; bottom: 12px; padding: 6px 9px; border: 1px solid rgba(120,140,130,.2); border-radius: 8px; background: rgba(250,252,250,.83); backdrop-filter: blur(8px); color: var(--muted); font: 10px/1 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.surface-detection-toast { position:absolute;left:14px;top:14px;z-index:6;width:min(390px,calc(100% - 98px));display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding:12px 13px;border:1px solid rgba(64,93,76,.2);border-radius:13px;background:rgba(250,252,250,.94);box-shadow:0 12px 32px rgba(24,44,35,.12);backdrop-filter:blur(12px); }
+.surface-detection-toast > div { display:flex;gap:10px;align-items:flex-start;min-width:0; }
+.surface-detection-toast > div > span { flex:0 0 auto;width:25px;height:25px;display:grid;place-items:center;border-radius:8px;background:#e6ece8;color:#49645a;font-weight:850; }
+.surface-detection-toast.success > div > span { background:#dff2e4;color:#227044; }
+.surface-detection-toast .loader { flex:0 0 auto;width:24px;height:24px; }
+.surface-detection-toast p { display:grid;gap:3px;margin:0;min-width:0; }
+.surface-detection-toast strong { font-size:12px; }
+.surface-detection-toast small,.surface-detection-toast em { color:#58675f;font-size:10px;line-height:1.45;font-style:normal; }
+.surface-detection-toast em { color:#27704e;font-weight:700; }
+.surface-detection-toast > button { border:0;border-radius:8px;background:#e8eeea;padding:6px 8px;font-size:9px;font-weight:750;cursor:pointer; }
 .map-controls { position: absolute; right: 14px; top: 14px; display: grid; grid-template-columns: repeat(4, 34px); align-items: center; padding: 4px; border: 1px solid rgba(120,140,130,.2); border-radius: 12px; background: rgba(250,252,250,.9); backdrop-filter: blur(10px); box-shadow: 0 8px 25px rgba(24,44,35,.08); }
 .map-controls button { width: 34px; height: 32px; border: 0; border-radius: 8px; background: transparent; color: var(--ink); font-size: 17px; font-weight: 700; cursor: pointer; }
 .map-controls button:hover, .map-controls button:focus-visible { background: #e8efea; outline: none; }
@@ -134,8 +153,13 @@ button { color: inherit; }
 .muted { color: var(--muted); font-size: 10px; }
 
 @media (max-width: 1100px) {
-  .workspace { grid-template-columns: 235px minmax(420px, 1fr); }
+  .workspace { grid-template-columns: var(--viewer-tree-width, 235px) 10px minmax(420px, 1fr); }
   .right-panel { display: none; }
+}
+
+@media (max-width: 760px) {
+  .workspace { grid-template-columns: 220px minmax(420px, 1fr); }
+  .viewer-column-resizer { display: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {

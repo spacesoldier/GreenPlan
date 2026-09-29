@@ -33,6 +33,7 @@ from .models import (
     ProjectSummary,
     SceneLayer,
     SceneManifest,
+    SurfaceRegionDetection,
     SceneRoot,
     SceneSource,
     SceneSpatialFocus,
@@ -674,6 +675,85 @@ class PostgisRepository:
                 )
                 for row in rows
             ]
+
+    def detect_surface_region(
+        self, model_id: UUID, root_id: UUID | None, x: float, y: float,
+    ) -> SurfaceRegionDetection | None:
+        with self._connect() as connection, connection.cursor() as cursor:
+            model = self._model_row(cursor, model_id)
+            if model is None:
+                return None
+            root_clause = "AND so.properties->>'publication_root_id'=%s" if root_id else ""
+            params: list[object] = [x, y, model_id]
+            if root_id:
+                params.append(str(root_id))
+            params.append(model_id)
+            if root_id:
+                params.append(str(root_id))
+            cursor.execute(
+                f"""
+                WITH seed AS (
+                  SELECT ST_SetSRID(ST_MakePoint(%s,%s),0) AS geom
+                ), explicit AS (
+                  SELECT og.geom, 0 AS priority, 'explicit_surface_polygon'::text AS source
+                  FROM geo.spatial_objects so
+                  JOIN geo.object_classes oc ON oc.id=so.class_id
+                  JOIN geo.object_geometries og ON og.object_id=so.id AND og.is_primary
+                  CROSS JOIN seed
+                  WHERE so.model_id=%s {root_clause}
+                    AND og.geom && ST_Expand(seed.geom,150)
+                    AND oc.code IN ('vegetation.grass','surface.lawn')
+                    AND GeometryType(og.geom) IN ('POLYGON','MULTIPOLYGON')
+                    AND ST_Covers(og.geom,seed.geom)
+                ), edge_source AS (
+                  SELECT so.id,oc.code,
+                    CASE WHEN GeometryType(og.geom) IN ('POLYGON','MULTIPOLYGON')
+                      THEN ST_Boundary(og.geom) ELSE ST_CollectionExtract(og.geom,2) END AS geom
+                  FROM geo.spatial_objects so
+                  JOIN geo.object_classes oc ON oc.id=so.class_id
+                  JOIN geo.object_geometries og ON og.object_id=so.id AND og.is_primary
+                  CROSS JOIN seed
+                  WHERE so.model_id=%s {root_clause}
+                    AND og.geom && ST_Expand(seed.geom,150)
+                    AND (
+                      oc.code LIKE 'transport.%%' OR oc.code LIKE 'surface.%%'
+                      OR oc.code LIKE 'structure.%%' OR oc.code='territory.work_boundary'
+                      OR oc.code IN ('terrain.slope_toe','terrain.retaining_wall')
+                    )
+                    AND oc.code NOT LIKE 'utility.%%'
+                    AND NOT ST_IsEmpty(og.geom)
+                ), noded AS (
+                  SELECT ST_Node(ST_UnaryUnion(ST_Collect(geom))) AS geom FROM edge_source
+                  WHERE NOT ST_IsEmpty(geom)
+                ), reconstructed AS (
+                  SELECT polygon.geom,1 AS priority,'polygonized_surface_linework'::text AS source
+                  FROM noded CROSS JOIN LATERAL ST_Dump(ST_Polygonize(ARRAY[noded.geom])) polygon
+                  CROSS JOIN seed
+                  WHERE ST_Covers(polygon.geom,seed.geom)
+                ), candidates AS (
+                  SELECT * FROM explicit UNION ALL SELECT * FROM reconstructed
+                ), selected AS (
+                  SELECT geom,priority,source FROM candidates
+                  WHERE ST_Area(geom)>0.25 ORDER BY priority,ST_Area(geom) LIMIT 1
+                )
+                SELECT ST_AsGeoJSON(selected.geom)::jsonb AS geometry,
+                       ST_Area(selected.geom)::float8 AS area,selected.source,
+                       (SELECT count(*)::integer FROM edge_source e WHERE ST_Intersects(e.geom,ST_Boundary(selected.geom))) AS edge_count,
+                       (SELECT COALESCE(array_agg(DISTINCT e.code ORDER BY e.code),ARRAY[]::text[])
+                        FROM edge_source e WHERE ST_Intersects(e.geom,ST_Boundary(selected.geom))) AS classes
+                FROM selected
+                """,
+                params,
+            )
+            row = cursor.fetchone()
+            if row is None:
+                return None
+            return SurfaceRegionDetection(
+                model_id=model_id, root_id=root_id, seed=(x, y),
+                geometry=row["geometry"] if isinstance(row["geometry"], dict) else json.loads(row["geometry"]),
+                area=row["area"], confidence=0.96 if row["source"] == "explicit_surface_polygon" else 0.72,
+                edge_count=row["edge_count"], source=row["source"], contributing_classes=row["classes"],
+            )
 
     def get_object(self, object_id: UUID) -> ObjectDetail | None:
         with self._connect() as connection, connection.cursor() as cursor:

@@ -1,6 +1,6 @@
 # Phase 4, iteration 4: Semantic revisions and planting feasibility zones
 
-- Status: Planned
+- Status: In progress
 - Date: 2026-09-30
 - Owners: domain / geospatial / API / web
 - Prerequisites: ADR-0035, ADR-0036, ADR-0048, ADR-0049
@@ -59,6 +59,16 @@
 - every excluded area is explainable from UI;
 - repeated identical run reuses its fingerprinted result.
 
-## Completion report
+## Implementation checkpoint 2026-09-30
 
-To be filled after implementation and pilot verification.
+Implemented and verified:
+
+- resizable source/layer panel with persisted width;
+- explicit `navigate` and `mark_lawn` viewer tools;
+- root-scoped `POST /v1/models/{model_id}/surface-regions:detect` seed-point contract;
+- preference for an existing lawn polygon, with fallback polygonization of nearby surface/transport/structure boundaries;
+- hard exclusion of `utility.*` geometries from polygon construction;
+- green, review-only preview overlay with confidence, CAD-unit area and reset action;
+- live Old Guy check against `ДВ_ГП_П_Газон`: an explicit polygon of `205.9368` CAD² was recovered with `0.96` confidence.
+
+Still planned in this iteration: persistence/confirmation of candidate zones, semantic diff storage and save-version UX, metric CRS gate for normative buffers, constraint subtraction and separate tree/shrub/grass feasibility overlays. The current preview is deliberately not persisted and does not claim normative suitability.

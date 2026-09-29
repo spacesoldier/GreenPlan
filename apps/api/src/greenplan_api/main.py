@@ -32,6 +32,8 @@ from .models import (
     ProjectDetail,
     ProjectList,
     SceneManifest,
+    SurfaceRegionDetection,
+    SurfaceRegionRequest,
     SourceTree,
 )
 from .repository import BBox, Repository, RepositoryUnavailable
@@ -496,6 +498,27 @@ def create_app(repository: Repository | None = None) -> FastAPI:
                 raise ApiError(404, "publication_root_not_found", "publication root does not exist")
             raise ApiError(404, "model_not_found", "model does not exist")
         return manifest
+
+    @app.post(
+        "/v1/models/{model_id}/surface-regions:detect",
+        response_model=SurfaceRegionDetection,
+        tags=["scene"],
+    )
+    def detect_surface_region(model_id: UUID, request: SurfaceRegionRequest, repo: Repo):
+        manifest = repo.get_manifest(model_id, request.root_id)
+        if manifest is None:
+            if request.root_id is not None and repo.get_manifest(model_id) is not None:
+                raise ApiError(404, "publication_root_not_found", "publication root does not exist")
+            raise ApiError(404, "model_not_found", "model does not exist")
+        result = repo.detect_surface_region(model_id, manifest.active_root_id, request.x, request.y)
+        if result is None:
+            raise ApiError(
+                404,
+                "surface_region_not_found",
+                "no closed surface region contains the selected point",
+                {"x": request.x, "y": request.y, "root_id": str(manifest.active_root_id) if manifest.active_root_id else None},
+            )
+        return result
 
     @app.get(
         "/v1/models/{model_id}/features",

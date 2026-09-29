@@ -232,10 +232,11 @@ export async function renderCadSceneProgressively(
     if (index >= 0xffffff) return;
     ids.push(feature.id);
     const selected = feature.id === selectedId;
+    const surfacePreview = feature.class_code === "derived.surface_candidate";
     const review = feature.semantic_status === "needs_review";
-    context.strokeStyle = selected ? "#2e8d59" : review ? "#c18428" : "#526d86";
-    context.fillStyle = selected ? "rgba(71,176,113,.28)" : review ? "rgba(211,152,54,.10)" : "rgba(74,102,126,.08)";
-    context.lineWidth = (selected ? 2.6 : 1.1) / main.scale;
+    context.strokeStyle = surfacePreview ? "#1f8f4f" : selected ? "#2e8d59" : review ? "#c18428" : "#526d86";
+    context.fillStyle = surfacePreview ? "rgba(83,196,109,.34)" : selected ? "rgba(71,176,113,.28)" : review ? "rgba(211,152,54,.10)" : "rgba(74,102,126,.08)";
+    context.lineWidth = (surfacePreview ? 3.2 : selected ? 2.6 : 1.1) / main.scale;
     const visiblePaths = geometryPaths(feature, pointRadius);
     if (visiblePaths) {
       if (visiblePaths.fill) context.fill(visiblePaths.fill, "evenodd");

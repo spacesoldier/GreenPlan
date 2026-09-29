@@ -31,6 +31,27 @@ describe("domain proxy", () => {
     await expect(response.json()).resolves.toMatchObject({ error: { code: "model_not_found" } });
   });
 
+  it("forwards colon-delimited command resources", async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      expect(url).toBe("http://api:8000/v1/models/model-1/surface-regions%3Adetect");
+      return Response.json({ source: "explicit_surface_polygon" });
+    });
+    const request = new Request("http://web/api/domain/v1/models/model-1/surface-regions:detect", {
+      method: "POST",
+      body: JSON.stringify({ x: 1, y: 2 }),
+      headers: { "Content-Type": "application/json" },
+    });
+
+    const response = await proxyDomainRequest(
+      request,
+      ["v1", "models", "model-1", "surface-regions:detect"],
+      fetchMock as typeof fetch,
+      "http://api:8000",
+    );
+
+    expect(response.status).toBe(200);
+  });
+
   it("rejects path traversal before upstream call", async () => {
     const fetchMock = vi.fn();
     const request = new Request("http://web/api/domain/invalid");

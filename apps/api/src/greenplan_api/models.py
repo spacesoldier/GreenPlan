@@ -130,6 +130,25 @@ class Feature(ApiModel):
     properties: dict[str, Any] = Field(default_factory=dict)
 
 
+class SurfaceRegionRequest(ApiModel):
+    x: float = Field(allow_inf_nan=False)
+    y: float = Field(allow_inf_nan=False)
+    root_id: UUID | None = None
+
+
+class SurfaceRegionDetection(ApiModel):
+    resource_version: Literal["1"] = "1"
+    model_id: UUID
+    root_id: UUID | None = None
+    seed: tuple[float, float]
+    geometry: dict[str, Any]
+    area: float = Field(gt=0)
+    confidence: float = Field(ge=0, le=1)
+    edge_count: int = Field(ge=0)
+    source: Literal["explicit_surface_polygon", "polygonized_surface_linework"]
+    contributing_classes: list[str] = Field(default_factory=list)
+
+
 class FeatureCollection(ApiModel):
     resource_version: Literal["1"] = "1"
     model_id: UUID
