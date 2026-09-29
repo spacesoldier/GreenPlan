@@ -90,6 +90,25 @@ services:
         condition: service_healthy
     entrypoint: ["python", "-m", "greenplan_api.import_pilots"]
 
+  plant-library-import:
+    build:
+      context: ..
+      dockerfile: apps/api/Dockerfile
+    profiles: ["tools"]
+    user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
+    environment:
+      GREENPLAN_DATABASE_URL: postgresql://${POSTGIS_USER:-greenplan_domain}:${POSTGIS_PASSWORD:-greenplan_domain_dev_only}@postgis:5432/${POSTGIS_DB:-greenplan_domain}
+      PLANT_SYMBOL_DWG: /dataset/Шаблоны значков.dwg
+      PLANT_SYMBOL_DXF: /dataset/dxf/Шаблоны значков.dxf
+      HOME: /tmp
+      XDG_CACHE_HOME: /tmp/.cache
+    volumes:
+      - ../dataset:/dataset:ro
+    depends_on:
+      postgis:
+        condition: service_healthy
+    entrypoint: ["python", "-m", "greenplan_api.import_plant_symbols"]
+
   web:
     build:
       context: ..

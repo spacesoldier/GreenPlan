@@ -68,6 +68,9 @@ ADR фиксируют архитектурное решение, его кон�
 | [0041](0041-faceted-layer-navigator-for-spatial-viewer.md) | Proposed | Viewer использует фасетный source/semantic layer navigator и единый visibility state |
 | [0042](0042-multi-root-publication-set.md) | Accepted | Публикация выбирает несколько корней CAD-графа и автоматически включает их XREF closures |
 | [0043](0043-asynchronous-observable-publication-job.md) | Proposed | Фоновая single-flight публикация, серверный прогресс и события activity dock |
+| [0044](0044-qwen-runtime-image-and-regulatory-bootstrap.md) | Accepted | Публичный Qwen-only runtime и идемпотентный provenance-aware bootstrap СП |
+| [0045](0045-library-workspace-and-versioned-knowledge-catalogs.md) | Accepted | Общесистемная библиотека нормативов, принципов генерации и растений |
+| [0046](0046-cad-plant-symbol-library-ingestion.md) | Accepted | Импорт CAD-блоков растений с review, provenance и сохранением геометрии |
 
 ## Именование
 
